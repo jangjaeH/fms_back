@@ -1,7 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import { alarms, equipment, events, getDashboardSummary, mapSnapshot, missions, robots, tasks } from "../data/mockData.js";
-import type { Alarm, EventItem, Mission, Robot, Task } from "../types.js";
+import type { CreateTaskInput, EventItem, Mission, OverrideInput, Task, TaskType } from "../types.js";
+
+const validTaskTypes: TaskType[] = ["MOVE", "PICK", "DROP", "GO_CHARGE"];
+const validOverrideActions: OverrideInput["action"][] = ["PAUSE", "RESUME", "CANCEL", "REASSIGN"];
 
 export class FmsStore {
   getDashboardSummary() {
@@ -28,16 +31,39 @@ export class FmsStore {
     return [...tasks].sort((left, right) => right.priority - left.priority);
   }
 
-  createTask(input: Pick<Task, "type" | "priority" | "source" | "target" | "memo">) {
+  createTask(input: CreateTaskInput) {
+    if (!validTaskTypes.includes(input.type)) {
+      return { error: "Invalid task type", status: 400 } as const;
+    }
+    if (!Number.isInteger(input.priority) || input.priority < 1 || input.priority > 5) {
+      return { error: "Priority must be an integer between 1 and 5", status: 400 } as const;
+    }
+    if (!input.source.trim()) {
+      return { error: "Source is required", status: 400 } as const;
+    }
+
+    const chargerId = mapSnapshot.stations.find((station) => station.type === "CHARGER")?.id ?? "CH-01";
+    const resolvedTarget = input.type === "GO_CHARGE" ? chargerId : input.target?.trim();
+    if (!resolvedTarget) {
+      return { error: "Target is required", status: 400 } as const;
+    }
+    if (input.source === resolvedTarget) {
+      return { error: "Source and target cannot be the same", status: 400 } as const;
+    }
+
     const task: Task = {
       id: `T-${Math.floor(Math.random() * 9000 + 1000)}`,
       status: "QUEUED",
       createdAt: new Date().toISOString(),
-      ...input
+      type: input.type,
+      priority: input.priority,
+      source: input.source,
+      target: resolvedTarget,
+      memo: input.memo
     };
     tasks.unshift(task);
     this.appendEvent("task.created", task.id, { ...task });
-    return task;
+    return { data: task } as const;
   }
 
   updateTask(id: string, patch: Partial<Pick<Task, "priority" | "status" | "memo" | "target">>) {
@@ -53,11 +79,14 @@ export class FmsStore {
   cancelTask(id: string) {
     const task = tasks.find((item) => item.id === id);
     if (!task) {
-      return undefined;
+      return { error: "Task not found", status: 404 } as const;
+    }
+    if (task.status === "RUNNING") {
+      return { error: "Running tasks cannot be canceled", status: 409 } as const;
     }
     task.status = "CANCELED";
     this.appendEvent("task.canceled", id, { id });
-    return task;
+    return { data: task } as const;
   }
 
   getMissions() {
@@ -78,17 +107,42 @@ export class FmsStore {
     return mission;
   }
 
-  applyOverride(id: string, operator: string, action: string, reason: string) {
+  applyOverride(id: string, input: OverrideInput) {
     const mission = missions.find((item) => item.id === id);
     if (!mission) {
-      return undefined;
+      return { error: "Mission not found", status: 404 } as const;
     }
+    if (!validOverrideActions.includes(input.action)) {
+      return { error: "Invalid override action", status: 400 } as const;
+    }
+    if (!input.reason.trim()) {
+      return { error: "Reason is required", status: 400 } as const;
+    }
+
     mission.needsManualOverride = false;
-    if (action === "RESUME") {
+    if (input.action === "PAUSE") {
+      mission.state = "PAUSED";
+    }
+    if (input.action === "RESUME") {
       mission.state = "RUNNING";
     }
-    this.appendEvent("mission.override.applied", id, { operator, action, reason });
-    return mission;
+    if (input.action === "CANCEL") {
+      mission.state = "COMPLETED";
+      const linkedTask = tasks.find((task) => task.id === mission.taskId);
+      if (linkedTask) {
+        linkedTask.status = "CANCELED";
+      }
+    }
+    if (input.action === "REASSIGN" && input.targetRobotId) {
+      mission.robotId = input.targetRobotId;
+    }
+    this.appendEvent("mission.override.applied", id, {
+      operator: input.operator,
+      action: input.action,
+      reason: input.reason,
+      targetRobotId: input.targetRobotId
+    });
+    return { data: mission } as const;
   }
 
   getEquipment() {
@@ -114,23 +168,29 @@ export class FmsStore {
   ackAlarm(id: string, user: string) {
     const alarm = alarms.find((item) => item.id === id);
     if (!alarm) {
-      return undefined;
+      return { error: "Alarm not found", status: 404 } as const;
+    }
+    if (alarm.status !== "OPEN") {
+      return { error: "Only open alarms can be acknowledged", status: 409 } as const;
     }
     alarm.status = "ACKED";
     alarm.acknowledgedBy = user;
     this.appendEvent("alarm.acked", id, { user });
-    return alarm;
+    return { data: alarm } as const;
   }
 
   resolveAlarm(id: string, user: string) {
     const alarm = alarms.find((item) => item.id === id);
     if (!alarm) {
-      return undefined;
+      return { error: "Alarm not found", status: 404 } as const;
+    }
+    if (alarm.status === "RESOLVED") {
+      return { error: "Alarm already resolved", status: 409 } as const;
     }
     alarm.status = "RESOLVED";
     alarm.resolvedBy = user;
     this.appendEvent("alarm.resolved", id, { user });
-    return alarm;
+    return { data: alarm } as const;
   }
 
   getEvents() {

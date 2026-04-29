@@ -3,6 +3,9 @@ export type MissionState = "QUEUED" | "RUNNING" | "PAUSED" | "COMPLETED";
 export type AlarmSeverity = "CRITICAL" | "MAJOR" | "MINOR";
 export type AlarmStatus = "OPEN" | "ACKED" | "RESOLVED";
 export type EquipmentState = "READY" | "BUSY" | "FAULT" | "OFFLINE";
+export type TaskType = "MOVE" | "PICK" | "DROP" | "GO_CHARGE";
+export type TaskStatus = "QUEUED" | "ASSIGNED" | "RUNNING" | "COMPLETED" | "CANCELED";
+export type OverrideAction = "PAUSE" | "RESUME" | "CANCEL" | "REASSIGN";
 
 export interface DashboardSummary {
   activeRobots: number;
@@ -26,9 +29,9 @@ export interface Robot {
 
 export interface Task {
   id: string;
-  type: "MOVE" | "PICK" | "DROP" | "GO_CHARGE";
+  type: TaskType;
   priority: number;
-  status: "QUEUED" | "ASSIGNED" | "RUNNING" | "COMPLETED" | "CANCELED";
+  status: TaskStatus;
   source: string;
   target: string;
   memo?: string;
@@ -79,4 +82,19 @@ export interface MapSnapshot {
   height: number;
   stations: Array<{ id: string; label: string; x: number; y: number; type: string }>;
   blockedCells: string[];
+}
+
+export interface CreateTaskInput {
+  type: TaskType;
+  priority: number;
+  source: string;
+  target?: string;
+  memo?: string;
+}
+
+export interface OverrideInput {
+  operator: string;
+  action: OverrideAction;
+  reason: string;
+  targetRobotId?: string;
 }
