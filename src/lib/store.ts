@@ -37,24 +37,25 @@ const missionStepByTaskType: Record<TaskType, string> = {
 
 const routeProfilesByRobot: Record<string, RouteProfile[]> = {
   "R-01": [
-    { verticalX: 805, horizontalY: 610 },
-    { verticalX: 780, horizontalY: 710 }
+    { verticalX: 1525, horizontalY: 1000 },
+    { verticalX: 1170, horizontalY: 820 }
   ],
   "R-02": [
-    { verticalX: 600, horizontalY: 475 },
-    { verticalX: 640, horizontalY: 330 }
+    { verticalX: 825, horizontalY: 560 },
+    { verticalX: 1170, horizontalY: 720 }
   ],
   "R-03": [
-    { verticalX: 170, horizontalY: 775 },
-    { verticalX: 220, horizontalY: 700 }
+    { verticalX: 150, horizontalY: 1000 },
+    { verticalX: 490, horizontalY: 900 }
   ]
 };
 
 const sharedRouteProfiles: RouteProfile[] = [
-  { verticalX: 220, horizontalY: 540 },
-  { verticalX: 405, horizontalY: 475 },
-  { verticalX: 600, horizontalY: 700 },
-  { verticalX: 805, horizontalY: 710 }
+  { verticalX: 150, horizontalY: 230 },
+  { verticalX: 490, horizontalY: 390 },
+  { verticalX: 825, horizontalY: 550 },
+  { verticalX: 1170, horizontalY: 710 },
+  { verticalX: 1525, horizontalY: 870 }
 ];
 
 const routeOverlapClearance = 24;
@@ -65,13 +66,13 @@ const chargeStopThreshold = 80;
 const chargerArrivalTolerance = 36;
 const batteryClocks = new Map<string, BatteryClock>();
 
-const autoTaskTemplates: Array<Omit<CreateTaskInput, "priority">> = [
-  { type: "PICK", source: "PICK-01", target: "ST-08", memo: "auto: receiving dock to rack buffer" },
-  { type: "MOVE", source: "ST-08", target: "ASM-01", memo: "auto: rack buffer to assembly cell" },
-  { type: "MOVE", source: "ASM-01", target: "QC-01", memo: "auto: assembly to QC packing" },
-  { type: "DROP", source: "QC-01", target: "DROP-02", memo: "auto: QC packing to shipping dock" },
-  { type: "PICK", source: "PICK-02", target: "ASM-02", memo: "auto: receiving dock to assembly cell" }
-];
+const productionLineNumbers = Array.from({ length: 10 }, (_, index) => String(index + 1).padStart(2, "0"));
+const autoTaskTemplates: Array<Omit<CreateTaskInput, "priority">> = productionLineNumbers.flatMap((line) => [
+  { type: "PICK", source: `SPLY-${line}`, target: `PRI-${line}`, memo: `routine ${line}: supply deck to primary equipment` },
+  { type: "MOVE", source: `PRI-${line}`, target: `INV-${line}`, memo: `routine ${line}: primary equipment to turnover unit` },
+  { type: "MOVE", source: `INV-${line}`, target: `SEC-${line}`, memo: `routine ${line}: turnover unit to secondary equipment` },
+  { type: "DROP", source: `SEC-${line}`, target: `DRP-${line}`, memo: `routine ${line}: secondary equipment to drop port` }
+]);
 
 const autoTaskState = {
   enabled: true,

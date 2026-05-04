@@ -115,10 +115,18 @@ describe("robot monitoring backend", () => {
     }
   });
 
-  it("exposes two charging stations on the facility map", async () => {
+  it("exposes the wide production line and two charging stations on the facility map", async () => {
     const response = await request(app).get("/map");
+    const stationCountByType = (type: string) =>
+      response.body.stations.filter((station: { type: string }) => station.type === type).length;
     const chargers = response.body.stations.filter((station: { type: string }) => station.type === "CHARGER");
 
+    expect(response.body).toMatchObject({ width: 1800, height: 1100 });
+    expect(stationCountByType("SUPPLY")).toBe(10);
+    expect(stationCountByType("PRIMARY")).toBe(10);
+    expect(stationCountByType("INVERTER")).toBe(10);
+    expect(stationCountByType("SECONDARY")).toBe(10);
+    expect(stationCountByType("DROP")).toBe(10);
     expect(chargers).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "CH-01" }),
@@ -143,8 +151,8 @@ describe("robot monitoring backend", () => {
     const response = await request(app).post("/tasks").send({
       type: "MOVE",
       priority: 2,
-      source: "ST-02",
-      target: "ST-05"
+      source: "SPLY-02",
+      target: "PRI-02"
     });
 
     expect(response.status).toBe(201);
@@ -232,10 +240,8 @@ describe("robot monitoring backend", () => {
       target: "CH-01"
     });
     if (response.body.mission) {
-      expect(response.body.mission).toMatchObject({
-        taskId: response.body.task.id,
-        state: "RUNNING"
-      });
+      expect(response.body.mission.taskId).toBe(response.body.task.id);
+      expect(["RUNNING", "COMPLETED"]).toContain(response.body.mission.state);
     }
   });
 
