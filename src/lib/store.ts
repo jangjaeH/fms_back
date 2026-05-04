@@ -46,7 +46,7 @@ function locationCoordinate(id: string, fallback: Coordinate): Coordinate {
     return { x: robot.x, y: robot.y };
   }
 
-  const bufferLane = mapSnapshot.lanes.find((lane) => lane.id === "LANE-MAIN")?.points ?? [];
+  const bufferLane = mapSnapshot.lanes.find((lane) => lane.id === "LANE-SPINE")?.points ?? [];
   const bufferPoint = bufferLane[Math.abs([...id].reduce((sum, char) => sum + char.charCodeAt(0), 0)) % bufferLane.length];
   return bufferPoint ?? fallback;
 }

@@ -15,20 +15,20 @@ export const robots: Robot[] = [
     name: "Atlas-01",
     state: "MOVING",
     battery: 82,
-    currentCell: "C3",
+    currentCell: "MAIN-AISLE",
     targetCell: "DROP-02",
-    reservedCells: ["AISLE-A3", "XFER-02", "DROP-02"],
+    reservedCells: ["MAIN-AISLE", "QC-01", "DROP-02"],
     missionId: "M-1001",
-    x: 280,
-    y: 330,
-    heading: 90,
+    x: 430,
+    y: 610,
+    heading: 0,
     radius: 18,
     routeIndex: 1,
     route: [
-      { x: 280, y: 330 },
-      { x: 520, y: 330 },
-      { x: 690, y: 520 },
-      { x: 760, y: 720 }
+      { x: 430, y: 610 },
+      { x: 640, y: 610 },
+      { x: 780, y: 640 },
+      { x: 805, y: 855 }
     ]
   },
   {
@@ -36,19 +36,20 @@ export const robots: Robot[] = [
     name: "Atlas-02",
     state: "WAITING_PATH",
     battery: 64,
-    currentCell: "F4",
+    currentCell: "PROD-AISLE",
     targetCell: "ST-08",
-    reservedCells: ["WAIT-01", "AISLE-C2", "ST-08"],
+    reservedCells: ["PROD-AISLE", "ST-08"],
     missionId: "M-1002",
-    x: 620,
-    y: 420,
-    heading: 180,
+    x: 640,
+    y: 330,
+    heading: 270,
     radius: 18,
     routeIndex: 1,
     route: [
-      { x: 620, y: 420 },
-      { x: 620, y: 620 },
-      { x: 430, y: 620 }
+      { x: 640, y: 330 },
+      { x: 640, y: 610 },
+      { x: 405, y: 610 },
+      { x: 405, y: 475 }
     ]
   },
   {
@@ -60,12 +61,12 @@ export const robots: Robot[] = [
     targetCell: null,
     reservedCells: [],
     missionId: null,
-    x: 160,
-    y: 780,
+    x: 170,
+    y: 775,
     heading: 0,
     radius: 18,
     routeIndex: 0,
-    route: [{ x: 160, y: 780 }]
+    route: [{ x: 170, y: 775 }]
   }
 ];
 
@@ -204,82 +205,118 @@ export const mapSnapshot: MapSnapshot = {
   width: 1000,
   height: 1000,
   stations: [
-    { id: "PICK-01", label: "Inbound Pick 01", x: 105, y: 210, width: 150, height: 105, type: "PICK" },
-    { id: "PICK-02", label: "Inbound Pick 02", x: 105, y: 355, width: 150, height: 105, type: "PICK" },
-    { id: "DROP-02", label: "Outbound Drop 02", x: 720, y: 660, width: 170, height: 120, type: "DROP" },
-    { id: "CH-01", label: "Charging Bay", x: 85, y: 720, width: 145, height: 120, type: "CHARGER" },
-    { id: "ST-08", label: "Buffer Station 08", x: 360, y: 565, width: 145, height: 110, type: "BUFFER" }
+    { id: "PICK-01", label: "Receiving Dock 1", x: 88, y: 120, width: 150, height: 72, type: "DOCK" },
+    { id: "PICK-02", label: "Receiving Dock 2", x: 88, y: 220, width: 150, height: 72, type: "DOCK" },
+    { id: "ST-08", label: "Rack Buffer 08", x: 345, y: 430, width: 126, height: 88, type: "BUFFER" },
+    { id: "ASM-01", label: "Assembly Cell A", x: 725, y: 145, width: 150, height: 105, type: "ASSEMBLY" },
+    { id: "ASM-02", label: "Assembly Cell B", x: 725, y: 315, width: 150, height: 105, type: "ASSEMBLY" },
+    { id: "QC-01", label: "QC / Packing", x: 700, y: 595, width: 170, height: 88, type: "QC" },
+    { id: "DROP-02", label: "Shipping Dock 2", x: 720, y: 815, width: 170, height: 80, type: "DOCK" },
+    { id: "CH-01", label: "Charging Bay", x: 105, y: 720, width: 130, height: 90, type: "CHARGER" }
   ],
   zones: [
-    { id: "ZONE-IN", label: "Inbound Area", x: 60, y: 155, width: 230, height: 360, type: "WORK" },
-    { id: "ZONE-ASRS", label: "Storage Racks", x: 365, y: 120, width: 260, height: 285, type: "STORAGE" },
-    { id: "ZONE-OUT", label: "Outbound Area", x: 685, y: 565, width: 255, height: 270, type: "WORK" },
-    { id: "ZONE-CHARGE", label: "Charging / Maintenance", x: 55, y: 675, width: 235, height: 210, type: "SERVICE" }
+    { id: "ZONE-RECV", label: "Receiving Dock", x: 60, y: 75, width: 220, height: 255, type: "DOCK" },
+    { id: "ZONE-RACK", label: "High-Bay Rack Storage", x: 320, y: 75, width: 315, height: 465, type: "STORAGE" },
+    { id: "ZONE-PROD", label: "Assembly / Process Cells", x: 680, y: 80, width: 250, height: 445, type: "PRODUCTION" },
+    { id: "ZONE-QC", label: "QC / Packing", x: 660, y: 560, width: 270, height: 155, type: "QC" },
+    { id: "ZONE-SHIP", label: "Shipping Dock", x: 660, y: 775, width: 270, height: 155, type: "DOCK" },
+    { id: "ZONE-SERVICE", label: "Charging / Maintenance", x: 65, y: 670, width: 225, height: 230, type: "SERVICE" },
+    { id: "ZONE-OFFICE", label: "Control Room", x: 70, y: 410, width: 205, height: 145, type: "OFFICE" }
   ],
   obstacles: [
-    { id: "RACK-A", label: "Rack A", x: 380, y: 145, width: 55, height: 240, type: "RACK" },
-    { id: "RACK-B", label: "Rack B", x: 470, y: 145, width: 55, height: 240, type: "RACK" },
-    { id: "RACK-C", label: "Rack C", x: 560, y: 145, width: 55, height: 240, type: "RACK" },
-    { id: "SAFETY-01", label: "Human Safety Fence", x: 695, y: 120, width: 170, height: 280, type: "FENCE" },
-    { id: "COLUMN-01", label: "Column", x: 330, y: 510, width: 52, height: 52, type: "COLUMN" },
-    { id: "COLUMN-02", label: "Column", x: 650, y: 455, width: 52, height: 52, type: "COLUMN" }
+    { id: "DOOR-IN-01", label: "Roll-up Door", x: 34, y: 122, width: 24, height: 70, type: "DOCK_DOOR" },
+    { id: "DOOR-IN-02", label: "Roll-up Door", x: 34, y: 222, width: 24, height: 70, type: "DOCK_DOOR" },
+    { id: "DOOR-OUT-02", label: "Trailer Door", x: 782, y: 932, width: 120, height: 24, type: "DOCK_DOOR" },
+    { id: "RACK-A1", label: "Rack A1", x: 335, y: 110, width: 42, height: 300, type: "RACK" },
+    { id: "RACK-A2", label: "Rack A2", x: 405, y: 110, width: 42, height: 300, type: "RACK" },
+    { id: "RACK-A3", label: "Rack A3", x: 475, y: 110, width: 42, height: 300, type: "RACK" },
+    { id: "RACK-A4", label: "Rack A4", x: 545, y: 110, width: 42, height: 300, type: "RACK" },
+    { id: "CONV-01", label: "Infeed Conveyor", x: 655, y: 140, width: 38, height: 300, type: "CONVEYOR" },
+    { id: "CONV-02", label: "Pack Conveyor", x: 675, y: 585, width: 235, height: 36, type: "CONVEYOR" },
+    { id: "FENCE-PROD", label: "Safety Fence", x: 670, y: 70, width: 270, height: 470, type: "FENCE" },
+    { id: "WALL-CTRL-N", label: "Wall", x: 70, y: 405, width: 205, height: 16, type: "WALL" },
+    { id: "WALL-CTRL-E", label: "Wall", x: 259, y: 405, width: 16, height: 150, type: "WALL" },
+    { id: "COLUMN-01", label: "Column", x: 298, y: 592, width: 42, height: 42, type: "COLUMN" },
+    { id: "COLUMN-02", label: "Column", x: 565, y: 592, width: 42, height: 42, type: "COLUMN" },
+    { id: "COLUMN-03", label: "Column", x: 920, y: 542, width: 42, height: 42, type: "COLUMN" },
+    { id: "MAINT-BENCH", label: "Maintenance Bench", x: 92, y: 830, width: 150, height: 42, type: "MACHINE" }
   ],
   lanes: [
     {
-      id: "LANE-MAIN",
-      label: "Main AGV Aisle",
+      id: "LANE-SPINE",
+      label: "Main AGV Spine",
+      width: 72,
+      points: [
+        { x: 220, y: 610 },
+        { x: 430, y: 610 },
+        { x: 640, y: 610 },
+        { x: 805, y: 610 }
+      ]
+    },
+    {
+      id: "LANE-RECV",
+      label: "Receiving Cross Aisle",
+      width: 62,
+      points: [
+        { x: 220, y: 155 },
+        { x: 220, y: 255 },
+        { x: 220, y: 420 },
+        { x: 220, y: 610 }
+      ]
+    },
+    {
+      id: "LANE-RACK",
+      label: "Rack Transfer Aisle",
+      width: 56,
+      points: [
+        { x: 405, y: 475 },
+        { x: 405, y: 610 },
+        { x: 640, y: 610 }
+      ]
+    },
+    {
+      id: "LANE-PROD",
+      label: "Production Feed Aisle",
       width: 58,
       points: [
-        { x: 120, y: 600 },
-        { x: 310, y: 600 },
-        { x: 520, y: 600 },
-        { x: 780, y: 600 }
+        { x: 640, y: 185 },
+        { x: 640, y: 330 },
+        { x: 640, y: 610 }
       ]
     },
     {
-      id: "LANE-INBOUND",
-      label: "Inbound Aisle",
+      id: "LANE-SHIP",
+      label: "Shipping Aisle",
+      width: 62,
+      points: [
+        { x: 805, y: 610 },
+        { x: 805, y: 710 },
+        { x: 805, y: 855 }
+      ]
+    },
+    {
+      id: "LANE-SERVICE",
+      label: "Service Aisle",
       width: 52,
       points: [
-        { x: 280, y: 250 },
-        { x: 280, y: 330 },
-        { x: 280, y: 460 },
-        { x: 280, y: 600 }
-      ]
-    },
-    {
-      id: "LANE-STORAGE",
-      label: "Rack Transfer Aisle",
-      width: 50,
-      points: [
-        { x: 520, y: 330 },
-        { x: 520, y: 455 },
-        { x: 620, y: 455 },
-        { x: 620, y: 620 }
-      ]
-    },
-    {
-      id: "LANE-OUTBOUND",
-      label: "Outbound Aisle",
-      width: 54,
-      points: [
-        { x: 690, y: 520 },
-        { x: 760, y: 600 },
-        { x: 760, y: 720 }
-      ]
-    },
-    {
-      id: "LANE-CHARGE",
-      label: "Charge Aisle",
-      width: 52,
-      points: [
-        { x: 160, y: 780 },
-        { x: 160, y: 600 },
-        { x: 280, y: 600 }
+        { x: 170, y: 775 },
+        { x: 170, y: 610 },
+        { x: 220, y: 610 }
       ]
     }
   ],
-  blockedCells: ["RACK-A", "RACK-B", "RACK-C", "SAFETY-01", "COLUMN-01", "COLUMN-02"]
+  blockedCells: [
+    "RACK-A1",
+    "RACK-A2",
+    "RACK-A3",
+    "RACK-A4",
+    "FENCE-PROD",
+    "WALL-CTRL-N",
+    "WALL-CTRL-E",
+    "COLUMN-01",
+    "COLUMN-02",
+    "COLUMN-03"
+  ]
 };
 
 export const getDashboardSummary = (): DashboardSummary => ({
