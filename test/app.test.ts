@@ -63,6 +63,28 @@ describe("robot monitoring backend", () => {
     }
   });
 
+  it("reports and updates the auto task generator", async () => {
+    const status = await request(app).get("/simulation/auto-tasks");
+
+    expect(status.status).toBe(200);
+    expect(status.body).toMatchObject({
+      enabled: expect.any(Boolean),
+      intervalMs: expect.any(Number),
+      generatedCount: expect.any(Number)
+    });
+
+    const updated = await request(app).patch("/simulation/auto-tasks").send({
+      enabled: false,
+      intervalMs: 5000
+    });
+
+    expect(updated.status).toBe(200);
+    expect(updated.body).toMatchObject({
+      enabled: false,
+      intervalMs: 5000
+    });
+  });
+
   it("rejects an invalid task request", async () => {
     const response = await request(app).post("/tasks").send({
       type: "MOVE",

@@ -27,3 +27,4 @@ docker compose -f ../docker-compose.yml up --build
 - API: `http://localhost:4000`
 - Health check: `http://localhost:4000/health`
 - `POST /tasks` 또는 `POST /missions`로 Task를 생성하면 가용 로봇에 즉시 Mission이 배정됩니다.
+- `GET/PATCH /simulation/auto-tasks`로 idle 로봇에 Task를 자동 생성하는 시뮬레이터를 확인하거나 켜고 끌 수 있습니다.

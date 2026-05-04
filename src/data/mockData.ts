@@ -95,7 +95,7 @@ export const tasks: Task[] = [
     id: "T-1003",
     type: "GO_CHARGE",
     priority: 3,
-    status: "QUEUED",
+    status: "COMPLETED",
     source: "R-02",
     target: "CH-01",
     createdAt: "2026-04-29T08:20:00.000Z"

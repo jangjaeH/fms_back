@@ -111,3 +111,15 @@ export interface OverrideInput {
   reason: string;
   targetRobotId?: string;
 }
+
+export interface AutoTaskStatus {
+  enabled: boolean;
+  intervalMs: number;
+  generatedCount: number;
+  lastGeneratedAt: string | null;
+  lastTaskId: string | null;
+  lastMissionId: string | null;
+  idleRobots: number;
+  queuedTasks: number;
+  activeMissions: number;
+}

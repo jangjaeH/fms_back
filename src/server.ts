@@ -25,12 +25,14 @@ wsServer.on("connection", (socket) => {
 
 const interval = setInterval(() => {
   store.tickRobotPositions();
+  const autoTasks = store.runAutoTaskScheduler();
   const message = JSON.stringify({
     type: "heartbeat",
     payload: {
       timestamp: new Date().toISOString(),
       summary: store.getDashboardSummary(),
-      robots: store.getRobots()
+      robots: store.getRobots(),
+      autoTasks
     }
   });
 

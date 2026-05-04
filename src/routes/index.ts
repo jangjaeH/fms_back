@@ -32,6 +32,23 @@ export const registerRoutes = (app: Express) => {
     response.json(store.getRobotEvents(request.params.id));
   });
 
+  app.get("/simulation/auto-tasks", (_request, response) => {
+    response.json(store.getAutoTaskStatus());
+  });
+
+  app.patch("/simulation/auto-tasks", (request, response) => {
+    response.json(
+      store.updateAutoTaskStatus({
+        enabled: typeof request.body?.enabled === "boolean" ? request.body.enabled : undefined,
+        intervalMs: typeof request.body?.intervalMs === "number" ? request.body.intervalMs : undefined
+      })
+    );
+  });
+
+  app.post("/simulation/auto-tasks/run", (_request, response) => {
+    response.status(201).json(store.runAutoTaskScheduler({ force: true }));
+  });
+
   app.get("/tasks", (_request, response) => {
     response.json(store.getTasks());
   });

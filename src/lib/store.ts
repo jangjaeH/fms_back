@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { alarms, equipment, events, getDashboardSummary, mapSnapshot, missions, robots, tasks } from "../data/mockData.js";
-import type { Coordinate, CreateTaskInput, EventItem, Mission, OverrideInput, Robot, Task, TaskType } from "../types.js";
+import type { AutoTaskStatus, Coordinate, CreateTaskInput, EventItem, Mission, OverrideInput, Robot, Task, TaskType } from "../types.js";
 
 const validTaskTypes: TaskType[] = ["MOVE", "PICK", "DROP", "GO_CHARGE"];
 const validOverrideActions: OverrideInput["action"][] = ["PAUSE", "RESUME", "CANCEL", "REASSIGN"];
@@ -17,6 +17,26 @@ const missionStepByTaskType: Record<TaskType, string> = {
   PICK: "MOVE_TO_PICK",
   DROP: "MOVE_TO_DROP",
   GO_CHARGE: "MOVE_TO_CHARGER"
+};
+
+const autoTaskTemplates: Array<Omit<CreateTaskInput, "priority">> = [
+  { type: "PICK", source: "PICK-01", target: "ST-08", memo: "auto: receiving dock to rack buffer" },
+  { type: "MOVE", source: "ST-08", target: "ASM-01", memo: "auto: rack buffer to assembly cell" },
+  { type: "MOVE", source: "ASM-01", target: "QC-01", memo: "auto: assembly to QC packing" },
+  { type: "DROP", source: "QC-01", target: "DROP-02", memo: "auto: QC packing to shipping dock" },
+  { type: "PICK", source: "PICK-02", target: "ASM-02", memo: "auto: receiving dock to assembly cell" },
+  { type: "GO_CHARGE", source: "R-03", memo: "auto: top up idle robot battery" }
+];
+
+const autoTaskState = {
+  enabled: true,
+  intervalMs: 7000,
+  cursor: 0,
+  generatedCount: 0,
+  lastGeneratedAt: null as string | null,
+  lastTaskId: null as string | null,
+  lastMissionId: null as string | null,
+  lastAttemptAt: 0
 };
 
 function nextDomainId(prefix: "T" | "M", existingIds: string[]) {
@@ -68,6 +88,79 @@ export class FmsStore {
     return robots;
   }
 
+  getAutoTaskStatus(): AutoTaskStatus {
+    return {
+      enabled: autoTaskState.enabled,
+      intervalMs: autoTaskState.intervalMs,
+      generatedCount: autoTaskState.generatedCount,
+      lastGeneratedAt: autoTaskState.lastGeneratedAt,
+      lastTaskId: autoTaskState.lastTaskId,
+      lastMissionId: autoTaskState.lastMissionId,
+      idleRobots: this.getIdleRobots().length,
+      queuedTasks: tasks.filter((task) => task.status === "QUEUED").length,
+      activeMissions: missions.filter((mission) => mission.state === "RUNNING" || mission.state === "QUEUED").length
+    };
+  }
+
+  updateAutoTaskStatus(input: Partial<Pick<AutoTaskStatus, "enabled" | "intervalMs">>) {
+    if (typeof input.enabled === "boolean") {
+      autoTaskState.enabled = input.enabled;
+    }
+    if (typeof input.intervalMs === "number" && Number.isFinite(input.intervalMs)) {
+      autoTaskState.intervalMs = Math.max(3000, Math.min(60000, Math.round(input.intervalMs)));
+    }
+    this.appendEvent("simulation.auto_tasks.updated", "simulation", {
+      enabled: autoTaskState.enabled,
+      intervalMs: autoTaskState.intervalMs
+    });
+    return this.getAutoTaskStatus();
+  }
+
+  runAutoTaskScheduler(options: { force?: boolean } = {}) {
+    this.dispatchQueuedTasks();
+
+    if (!autoTaskState.enabled && !options.force) {
+      return this.getAutoTaskStatus();
+    }
+
+    const now = Date.now();
+    if (!options.force && now - autoTaskState.lastAttemptAt < autoTaskState.intervalMs) {
+      return this.getAutoTaskStatus();
+    }
+
+    autoTaskState.lastAttemptAt = now;
+    const idleRobots = this.getIdleRobots();
+    if (!idleRobots.length || tasks.some((task) => task.status === "QUEUED")) {
+      return this.getAutoTaskStatus();
+    }
+
+    const generatedLimit = Math.min(idleRobots.length, 2);
+    for (let index = 0; index < generatedLimit; index += 1) {
+      const template = autoTaskTemplates[autoTaskState.cursor % autoTaskTemplates.length];
+      autoTaskState.cursor += 1;
+      const taskResult = this.createTask({
+        ...template,
+        priority: 3 + ((autoTaskState.cursor + index) % 3)
+      });
+      if ("error" in taskResult) {
+        this.appendEvent("simulation.auto_task.failed", "simulation", { template, error: taskResult.error });
+        continue;
+      }
+      autoTaskState.generatedCount += 1;
+      autoTaskState.lastGeneratedAt = new Date(now).toISOString();
+      autoTaskState.lastTaskId = taskResult.data.id;
+      autoTaskState.lastMissionId = taskResult.data.missionId ?? null;
+      this.appendEvent("simulation.auto_task.created", taskResult.data.id, {
+        taskId: taskResult.data.id,
+        missionId: taskResult.data.missionId ?? null,
+        source: taskResult.data.source,
+        target: taskResult.data.target
+      });
+    }
+
+    return this.getAutoTaskStatus();
+  }
+
   tickRobotPositions() {
     const speedPerTick = 28;
     let completedAnyMission = false;
@@ -88,10 +181,11 @@ export class FmsStore {
       const dy = target.y - robot.y;
       const distance = Math.hypot(dx, dy);
 
-      if (distance <= speedPerTick) {
+      const reachedWaypoint = distance <= speedPerTick;
+      if (reachedWaypoint) {
         robot.x = target.x;
         robot.y = target.y;
-        robot.routeIndex = (robot.routeIndex + 1) % robot.route.length;
+        robot.routeIndex += 1;
       } else {
         robot.x += (dx / distance) * speedPerTick;
         robot.y += (dy / distance) * speedPerTick;
@@ -101,7 +195,7 @@ export class FmsStore {
       robot.currentCell = `X${Math.round(robot.x)} Y${Math.round(robot.y)}`;
       this.updateMissionProgress(robot);
 
-      if (distance <= speedPerTick && robot.routeIndex >= robot.route.length - 1) {
+      if (reachedWaypoint && targetIndex === robot.route.length - 1) {
         completedAnyMission = this.completeRobotMission(robot) || completedAnyMission;
         continue;
       }
@@ -381,6 +475,10 @@ export class FmsStore {
     for (const task of [...tasks].filter((item) => item.status === "QUEUED").sort((left, right) => right.priority - left.priority)) {
       this.dispatchTask(task);
     }
+  }
+
+  private getIdleRobots() {
+    return robots.filter((robot) => robot.state === "IDLE" && !robot.missionId && robot.battery >= 20);
   }
 
   private dispatchTask(task: Task) {
