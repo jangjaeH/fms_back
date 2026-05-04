@@ -1,4 +1,4 @@
-export type RobotState = "IDLE" | "MOVING" | "WAITING_PATH" | "ERROR";
+export type RobotState = "IDLE" | "MOVING" | "WAITING_PATH" | "CHARGING" | "ERROR";
 export type MissionState = "QUEUED" | "RUNNING" | "PAUSED" | "COMPLETED";
 export type AlarmSeverity = "CRITICAL" | "MAJOR" | "MINOR";
 export type AlarmStatus = "OPEN" | "ACKED" | "RESOLVED";

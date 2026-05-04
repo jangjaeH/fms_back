@@ -2,6 +2,7 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 
 import { createApp } from "../src/app.js";
+import { store } from "../src/lib/store.js";
 
 interface RouteRobot {
   id: string;
@@ -114,6 +115,30 @@ describe("robot monitoring backend", () => {
     }
   });
 
+  it("exposes two charging stations on the facility map", async () => {
+    const response = await request(app).get("/map");
+    const chargers = response.body.stations.filter((station: { type: string }) => station.type === "CHARGER");
+
+    expect(chargers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "CH-01" }),
+        expect.objectContaining({ id: "CH-02" })
+      ])
+    );
+  });
+
+  it("drains a moving robot battery by one percent every five minutes", () => {
+    const robot = store.getRobot("R-01");
+    expect(robot).toBeDefined();
+
+    const initialBattery = robot!.battery;
+    const startTime = Date.now();
+    store.tickRobotPositions(startTime);
+    store.tickRobotPositions(startTime + 5 * 60 * 1000);
+
+    expect(robot!.battery).toBe(initialBattery - 1);
+  });
+
   it("creates a task and dispatches it into a mission", async () => {
     const response = await request(app).post("/tasks").send({
       type: "MOVE",
@@ -147,6 +172,51 @@ describe("robot monitoring backend", () => {
     for (const robot of otherActiveRobots) {
       expect(routesOverlap(dispatchedRobot?.route ?? [], robot.route)).toBe(false);
     }
+  });
+
+  it("dispatches low battery robots to charge and stops at eighty percent", () => {
+    const robot = store.getRobot("R-01");
+    expect(robot).toBeDefined();
+
+    Object.assign(robot!, {
+      state: "IDLE",
+      missionId: null,
+      battery: 20,
+      x: 260,
+      y: 775,
+      currentCell: "LOW-BATTERY",
+      targetCell: null,
+      reservedCells: [],
+      route: [{ x: 260, y: 775 }],
+      routeIndex: 0
+    });
+
+    store.tickRobotPositions(Date.now());
+
+    expect(robot!.state).toBe("MOVING");
+    expect(robot!.targetCell).toMatch(/^CH-/);
+    expect(robot!.missionId).toContain("M-");
+
+    Object.assign(robot!, {
+      state: "CHARGING",
+      missionId: null,
+      battery: 79,
+      currentCell: "CH-01",
+      targetCell: "CH-01",
+      reservedCells: ["CH-01"],
+      route: [{ x: 170, y: 765 }],
+      routeIndex: 0,
+      x: 170,
+      y: 765
+    });
+
+    const chargeStart = Date.now();
+    store.tickRobotPositions(chargeStart);
+    store.tickRobotPositions(chargeStart + 60 * 1000);
+
+    expect(robot!.battery).toBe(80);
+    expect(robot!.state).toBe("IDLE");
+    expect(robot!.targetCell).toBeNull();
   });
 
   it("creates a mission directly from the mission endpoint", async () => {

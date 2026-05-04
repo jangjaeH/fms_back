@@ -198,6 +198,13 @@ export const equipment: Equipment[] = [
     state: "FAULT",
     signal: "EMERGENCY_STOP",
     lastUpdated: "2026-04-29T08:23:00.000Z"
+  },
+  {
+    id: "EQ-04",
+    type: "CHARGER",
+    state: "READY",
+    signal: "AUTO_READY",
+    lastUpdated: "2026-04-29T08:24:00.000Z"
   }
 ];
 
@@ -212,7 +219,8 @@ export const mapSnapshot: MapSnapshot = {
     { id: "ASM-02", label: "Assembly Cell B", x: 725, y: 315, width: 150, height: 105, type: "ASSEMBLY" },
     { id: "QC-01", label: "QC / Packing", x: 700, y: 595, width: 170, height: 88, type: "QC" },
     { id: "DROP-02", label: "Shipping Dock 2", x: 720, y: 815, width: 170, height: 80, type: "DOCK" },
-    { id: "CH-01", label: "Charging Bay", x: 105, y: 720, width: 130, height: 90, type: "CHARGER" }
+    { id: "CH-01", label: "Charging Bay 1", x: 105, y: 720, width: 130, height: 90, type: "CHARGER" },
+    { id: "CH-02", label: "Charging Bay 2", x: 105, y: 595, width: 130, height: 82, type: "CHARGER" }
   ],
   zones: [
     { id: "ZONE-RECV", label: "Receiving Dock", x: 60, y: 75, width: 220, height: 255, type: "DOCK" },
@@ -220,7 +228,7 @@ export const mapSnapshot: MapSnapshot = {
     { id: "ZONE-PROD", label: "Assembly / Process Cells", x: 680, y: 80, width: 250, height: 445, type: "PRODUCTION" },
     { id: "ZONE-QC", label: "QC / Packing", x: 660, y: 560, width: 270, height: 155, type: "QC" },
     { id: "ZONE-SHIP", label: "Shipping Dock", x: 660, y: 775, width: 270, height: 155, type: "DOCK" },
-    { id: "ZONE-SERVICE", label: "Charging / Maintenance", x: 65, y: 670, width: 225, height: 230, type: "SERVICE" },
+    { id: "ZONE-SERVICE", label: "Charging / Maintenance", x: 65, y: 585, width: 225, height: 315, type: "SERVICE" },
     { id: "ZONE-OFFICE", label: "Control Room", x: 70, y: 410, width: 205, height: 145, type: "OFFICE" }
   ],
   obstacles: [

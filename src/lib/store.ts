@@ -22,6 +22,12 @@ interface RouteProfile {
   horizontalY: number;
 }
 
+interface BatteryClock {
+  lastUpdatedAt: number;
+  dischargeAccumulatorMs: number;
+  chargeAccumulatorMs: number;
+}
+
 const missionStepByTaskType: Record<TaskType, string> = {
   MOVE: "MOVE_TO_TARGET",
   PICK: "MOVE_TO_PICK",
@@ -52,14 +58,19 @@ const sharedRouteProfiles: RouteProfile[] = [
 ];
 
 const routeOverlapClearance = 24;
+const batteryDischargeIntervalMs = 5 * 60 * 1000;
+const batteryChargeIntervalMs = 60 * 1000;
+const lowBatteryThreshold = 20;
+const chargeStopThreshold = 80;
+const chargerArrivalTolerance = 36;
+const batteryClocks = new Map<string, BatteryClock>();
 
 const autoTaskTemplates: Array<Omit<CreateTaskInput, "priority">> = [
   { type: "PICK", source: "PICK-01", target: "ST-08", memo: "auto: receiving dock to rack buffer" },
   { type: "MOVE", source: "ST-08", target: "ASM-01", memo: "auto: rack buffer to assembly cell" },
   { type: "MOVE", source: "ASM-01", target: "QC-01", memo: "auto: assembly to QC packing" },
   { type: "DROP", source: "QC-01", target: "DROP-02", memo: "auto: QC packing to shipping dock" },
-  { type: "PICK", source: "PICK-02", target: "ASM-02", memo: "auto: receiving dock to assembly cell" },
-  { type: "GO_CHARGE", source: "R-03", memo: "auto: top up idle robot battery" }
+  { type: "PICK", source: "PICK-02", target: "ASM-02", memo: "auto: receiving dock to assembly cell" }
 ];
 
 const autoTaskState = {
@@ -87,6 +98,19 @@ function stationCenter(id: string): Coordinate | undefined {
     return undefined;
   }
   return { x: station.x + station.width / 2, y: station.y + station.height / 2 };
+}
+
+function chargerStations() {
+  return mapSnapshot.stations.filter((station) => station.type === "CHARGER");
+}
+
+function nearestChargerId(source: Coordinate) {
+  return chargerStations()
+    .sort(
+      (left, right) =>
+        Math.hypot(stationCenter(left.id)!.x - source.x, stationCenter(left.id)!.y - source.y) -
+        Math.hypot(stationCenter(right.id)!.x - source.x, stationCenter(right.id)!.y - source.y)
+    )[0]?.id;
 }
 
 function locationCoordinate(id: string, fallback: Coordinate): Coordinate {
@@ -260,6 +284,7 @@ export class FmsStore {
   }
 
   runAutoTaskScheduler(options: { force?: boolean } = {}) {
+    this.dispatchLowBatteryRobots();
     this.dispatchQueuedTasks();
 
     if (!autoTaskState.enabled && !options.force) {
@@ -304,9 +329,10 @@ export class FmsStore {
     return this.getAutoTaskStatus();
   }
 
-  tickRobotPositions() {
+  tickRobotPositions(now = Date.now()) {
     const speedPerTick = 28;
     let completedAnyMission = false;
+    const batteryStateChanged = this.updateRobotBatteries(now);
 
     for (const robot of robots) {
       if (robot.state !== "MOVING" || robot.route.length < 2) {
@@ -351,7 +377,8 @@ export class FmsStore {
       });
     }
 
-    if (completedAnyMission) {
+    const chargeDispatched = this.dispatchLowBatteryRobots();
+    if (completedAnyMission || batteryStateChanged || chargeDispatched) {
       this.dispatchQueuedTasks();
     }
   }
@@ -379,7 +406,7 @@ export class FmsStore {
       return { error: "Source is required", status: 400 } as const;
     }
 
-    const chargerId = mapSnapshot.stations.find((station) => station.type === "CHARGER")?.id ?? "CH-01";
+    const chargerId = nearestChargerId(locationCoordinate(input.source, { x: 500, y: 500 })) ?? "CH-01";
     const resolvedTarget = input.type === "GO_CHARGE" ? chargerId : input.target?.trim();
     if (!resolvedTarget) {
       return { error: "Target is required", status: 400 } as const;
@@ -624,8 +651,133 @@ export class FmsStore {
     }
   }
 
+  private updateRobotBatteries(now: number) {
+    let changed = false;
+
+    for (const robot of robots) {
+      const clock = batteryClocks.get(robot.id) ?? {
+        lastUpdatedAt: now,
+        dischargeAccumulatorMs: 0,
+        chargeAccumulatorMs: 0
+      };
+      const elapsedMs = Math.max(0, now - clock.lastUpdatedAt);
+      clock.lastUpdatedAt = now;
+      batteryClocks.set(robot.id, clock);
+
+      if (!elapsedMs) {
+        continue;
+      }
+
+      if (robot.state === "CHARGING") {
+        clock.dischargeAccumulatorMs = 0;
+        clock.chargeAccumulatorMs += elapsedMs;
+        const chargeSteps = Math.floor(clock.chargeAccumulatorMs / batteryChargeIntervalMs);
+        if (chargeSteps > 0) {
+          const previousBattery = robot.battery;
+          robot.battery = Math.min(100, robot.battery + chargeSteps);
+          clock.chargeAccumulatorMs %= batteryChargeIntervalMs;
+          changed = changed || robot.battery !== previousBattery;
+          if (robot.battery !== previousBattery) {
+            this.appendEvent("robot.battery.changed", robot.id, {
+              robotId: robot.id,
+              battery: robot.battery,
+              mode: "charging"
+            });
+          }
+        }
+        if (robot.battery >= chargeStopThreshold) {
+          this.stopChargingRobot(robot);
+          changed = true;
+        }
+        continue;
+      }
+
+      clock.chargeAccumulatorMs = 0;
+      if (robot.state !== "MOVING") {
+        clock.dischargeAccumulatorMs = 0;
+        continue;
+      }
+
+      clock.dischargeAccumulatorMs += elapsedMs;
+      const dischargeSteps = Math.floor(clock.dischargeAccumulatorMs / batteryDischargeIntervalMs);
+      if (dischargeSteps > 0) {
+        const previousBattery = robot.battery;
+        robot.battery = Math.max(0, robot.battery - dischargeSteps);
+        clock.dischargeAccumulatorMs %= batteryDischargeIntervalMs;
+        changed = changed || robot.battery !== previousBattery;
+        if (robot.battery !== previousBattery) {
+          this.appendEvent("robot.battery.changed", robot.id, {
+            robotId: robot.id,
+            battery: robot.battery,
+            mode: "discharging"
+          });
+        }
+      }
+    }
+
+    return changed;
+  }
+
+  private dispatchLowBatteryRobots() {
+    let dispatched = false;
+
+    for (const robot of robots) {
+      if (robot.state !== "IDLE" || robot.missionId || robot.battery > lowBatteryThreshold || this.hasPendingChargeTask(robot.id)) {
+        continue;
+      }
+
+      const chargerId = nearestChargerId({ x: robot.x, y: robot.y }) ?? "CH-01";
+      if (this.isRobotAtStation(robot, chargerId)) {
+        this.startChargingRobot(robot, chargerId);
+        dispatched = true;
+        continue;
+      }
+
+      const taskResult = this.createTask({
+        type: "GO_CHARGE",
+        priority: 5,
+        source: robot.id,
+        memo: `auto: battery ${robot.battery}% below charge threshold`
+      });
+
+      if ("error" in taskResult) {
+        this.appendEvent("robot.charge_dispatch.failed", robot.id, {
+          robotId: robot.id,
+          battery: robot.battery,
+          error: taskResult.error
+        });
+        continue;
+      }
+
+      this.appendEvent("robot.charge_dispatch.created", robot.id, {
+        robotId: robot.id,
+        battery: robot.battery,
+        taskId: taskResult.data.id,
+        missionId: taskResult.data.missionId ?? null,
+        target: taskResult.data.target
+      });
+      dispatched = true;
+    }
+
+    return dispatched;
+  }
+
+  private hasPendingChargeTask(robotId: string) {
+    return tasks.some(
+      (task) => task.type === "GO_CHARGE" && task.source === robotId && !["COMPLETED", "CANCELED"].includes(task.status)
+    );
+  }
+
+  private isRobotAtStation(robot: Robot, stationId: string) {
+    const station = stationCenter(stationId);
+    if (!station) {
+      return false;
+    }
+    return Math.hypot(robot.x - station.x, robot.y - station.y) <= chargerArrivalTolerance;
+  }
+
   private getIdleRobots() {
-    return robots.filter((robot) => robot.state === "IDLE" && !robot.missionId && robot.battery >= 20);
+    return robots.filter((robot) => robot.state === "IDLE" && !robot.missionId && robot.battery > lowBatteryThreshold);
   }
 
   private dispatchTask(task: Task) {
@@ -652,6 +804,15 @@ export class FmsStore {
     missions.unshift(mission);
     task.status = "ASSIGNED";
     task.missionId = mission.id;
+    if (task.type === "GO_CHARGE" && dispatchPlan.route.length < 2) {
+      mission.state = "COMPLETED";
+      mission.currentStep = "CHARGING";
+      mission.progress = 100;
+      task.status = "COMPLETED";
+      this.startChargingRobot(dispatchPlan.robot, task.target);
+      this.appendEvent("mission.created", mission.id, { ...mission, task });
+      return mission;
+    }
     this.assignMissionToRobot(dispatchPlan.robot, mission, task, dispatchPlan.route);
     this.appendEvent("mission.created", mission.id, { ...mission, task });
     return mission;
@@ -659,7 +820,7 @@ export class FmsStore {
 
   private findDispatchRobot(task: Task) {
     const hasEnoughBattery = (robot: Robot) => task.type === "GO_CHARGE" || robot.battery >= 35;
-    const isAvailable = (robot: Robot) => robot.state !== "ERROR" && !robot.missionId && hasEnoughBattery(robot);
+    const isAvailable = (robot: Robot) => robot.state === "IDLE" && !robot.missionId && hasEnoughBattery(robot);
     const sourceRobot = robots.find((robot) => robot.id === task.source && isAvailable(robot));
     if (sourceRobot) {
       return this.buildDispatchPlanForRobot(sourceRobot, task);
@@ -757,8 +918,41 @@ export class FmsStore {
       taskId: mission.taskId,
       robotId: robot.id
     });
+    if (task?.type === "GO_CHARGE") {
+      this.startChargingRobot(robot, task.target);
+      return true;
+    }
     this.releaseRobot(robot);
     return true;
+  }
+
+  private startChargingRobot(robot: Robot, stationId: string) {
+    robot.state = "CHARGING";
+    robot.missionId = null;
+    robot.targetCell = stationId;
+    robot.currentCell = stationId;
+    robot.reservedCells = [stationId];
+    robot.route = [{ x: robot.x, y: robot.y }];
+    robot.routeIndex = 0;
+    this.appendEvent("robot.charging.started", robot.id, {
+      robotId: robot.id,
+      stationId,
+      battery: robot.battery
+    });
+  }
+
+  private stopChargingRobot(robot: Robot) {
+    const stationId = robot.currentCell;
+    robot.state = "IDLE";
+    robot.targetCell = null;
+    robot.reservedCells = [];
+    robot.route = [{ x: robot.x, y: robot.y }];
+    robot.routeIndex = 0;
+    this.appendEvent("robot.charging.stopped", robot.id, {
+      robotId: robot.id,
+      stationId,
+      battery: robot.battery
+    });
   }
 
   private releaseRobot(robot: Robot) {
