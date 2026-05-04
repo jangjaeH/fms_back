@@ -48,15 +48,16 @@ export const robots: Robot[] = [
     targetCell: "PRI-01",
     reservedCells: ["SPLY-01", "PRI-01"],
     missionId: "M-1001",
-    x: 320,
-    y: 149,
-    heading: 0,
+    x: 245,
+    y: 300,
+    heading: 90,
     radius: 18,
-    routeIndex: 2,
+    routeIndex: 1,
     route: [
-      { x: 150, y: 149 },
-      { x: 320, y: 149 },
-      { x: 490, y: 154 }
+      { x: 245, y: 149 },
+      { x: 245, y: 930 },
+      { x: 390, y: 930 },
+      { x: 390, y: 154 }
     ]
   },
   {
@@ -68,15 +69,16 @@ export const robots: Robot[] = [
     targetCell: "SEC-05",
     reservedCells: ["INV-05", "SEC-05"],
     missionId: "M-1002",
-    x: 825,
+    x: 920,
     y: 482,
-    heading: 0,
+    heading: 90,
     radius: 18,
     routeIndex: 1,
     route: [
-      { x: 825, y: 482 },
-      { x: 960, y: 482 },
-      { x: 1170, y: 482 }
+      { x: 920, y: 482 },
+      { x: 920, y: 930 },
+      { x: 1070, y: 930 },
+      { x: 1070, y: 482 }
     ]
   },
   {
@@ -89,11 +91,11 @@ export const robots: Robot[] = [
     reservedCells: [],
     missionId: null,
     x: 145,
-    y: 1000,
+    y: 930,
     heading: 0,
     radius: 18,
     routeIndex: 0,
-    route: [{ x: 145, y: 1000 }]
+    route: [{ x: 145, y: 930 }]
   }
 ];
 
@@ -276,63 +278,84 @@ export const mapSnapshot: MapSnapshot = {
       label: "Main AGV Return Spine",
       width: 68,
       points: [
-        { x: 145, y: 1000 },
-        { x: 490, y: 1000 },
-        { x: 825, y: 1000 },
-        { x: 1170, y: 1000 },
-        { x: 1525, y: 1000 }
+        { x: 145, y: 930 },
+        { x: 390, y: 930 },
+        { x: 590, y: 930 },
+        { x: 730, y: 930 },
+        { x: 920, y: 930 },
+        { x: 1070, y: 930 },
+        { x: 1270, y: 930 },
+        { x: 1425, y: 930 }
       ]
     },
-    ...lineNumbers.map((line, index) => ({
-      id: `LANE-LINE-${line}`,
-      label: `Routine Line ${line}`,
-      width: 42,
-      points: [
-        { x: 150, y: lineY(index) + 29 },
-        { x: 490, y: lineY(index) + 34 },
-        { x: 825, y: lineY(index) + 34 },
-        { x: 1170, y: lineY(index) + 34 },
-        { x: 1525, y: lineY(index) + 29 }
-      ]
-    })),
     {
       id: "LANE-SUPPLY",
       label: "Supply Vertical Aisle",
       width: 54,
       points: [
-        { x: 150, y: 149 },
-        { x: 150, y: 887 },
-        { x: 145, y: 1000 }
+        { x: 245, y: 149 },
+        { x: 245, y: 887 },
+        { x: 245, y: 930 }
       ]
     },
     {
-      id: "LANE-PRIMARY",
-      label: "Primary Vertical Aisle",
+      id: "LANE-PRIMARY-L",
+      label: "Primary Infeed Aisle",
       width: 54,
       points: [
-        { x: 490, y: 154 },
-        { x: 490, y: 892 },
-        { x: 490, y: 1000 }
+        { x: 390, y: 154 },
+        { x: 390, y: 892 },
+        { x: 390, y: 930 }
       ]
     },
     {
-      id: "LANE-INVERTER",
-      label: "Turnover Vertical Aisle",
+      id: "LANE-PRIMARY-R",
+      label: "Primary Outfeed Aisle",
       width: 54,
       points: [
-        { x: 825, y: 154 },
-        { x: 825, y: 892 },
-        { x: 825, y: 1000 }
+        { x: 590, y: 154 },
+        { x: 590, y: 892 },
+        { x: 590, y: 930 }
       ]
     },
     {
-      id: "LANE-SECONDARY",
-      label: "Secondary Vertical Aisle",
+      id: "LANE-INVERTER-L",
+      label: "Turnover Infeed Aisle",
       width: 54,
       points: [
-        { x: 1170, y: 154 },
-        { x: 1170, y: 892 },
-        { x: 1170, y: 1000 }
+        { x: 730, y: 154 },
+        { x: 730, y: 892 },
+        { x: 730, y: 930 }
+      ]
+    },
+    {
+      id: "LANE-INVERTER-R",
+      label: "Turnover Outfeed Aisle",
+      width: 54,
+      points: [
+        { x: 920, y: 154 },
+        { x: 920, y: 892 },
+        { x: 920, y: 930 }
+      ]
+    },
+    {
+      id: "LANE-SECONDARY-L",
+      label: "Secondary Infeed Aisle",
+      width: 54,
+      points: [
+        { x: 1070, y: 154 },
+        { x: 1070, y: 892 },
+        { x: 1070, y: 930 }
+      ]
+    },
+    {
+      id: "LANE-SECONDARY-R",
+      label: "Secondary Outfeed Aisle",
+      width: 54,
+      points: [
+        { x: 1270, y: 154 },
+        { x: 1270, y: 892 },
+        { x: 1270, y: 930 }
       ]
     },
     {
@@ -340,9 +363,9 @@ export const mapSnapshot: MapSnapshot = {
       label: "Drop Vertical Aisle",
       width: 54,
       points: [
-        { x: 1525, y: 149 },
-        { x: 1525, y: 887 },
-        { x: 1525, y: 1000 }
+        { x: 1425, y: 149 },
+        { x: 1425, y: 887 },
+        { x: 1425, y: 930 }
       ]
     }
   ],

@@ -17,11 +17,6 @@ interface DispatchPlan {
   route: Coordinate[];
 }
 
-interface RouteProfile {
-  verticalX: number;
-  horizontalY: number;
-}
-
 interface BatteryClock {
   lastUpdatedAt: number;
   dischargeAccumulatorMs: number;
@@ -35,30 +30,13 @@ const missionStepByTaskType: Record<TaskType, string> = {
   GO_CHARGE: "MOVE_TO_CHARGER"
 };
 
-const routeProfilesByRobot: Record<string, RouteProfile[]> = {
-  "R-01": [
-    { verticalX: 1525, horizontalY: 1000 },
-    { verticalX: 1170, horizontalY: 820 }
-  ],
-  "R-02": [
-    { verticalX: 825, horizontalY: 560 },
-    { verticalX: 1170, horizontalY: 720 }
-  ],
-  "R-03": [
-    { verticalX: 150, horizontalY: 1000 },
-    { verticalX: 490, horizontalY: 900 }
-  ]
-};
-
-const sharedRouteProfiles: RouteProfile[] = [
-  { verticalX: 150, horizontalY: 230 },
-  { verticalX: 490, horizontalY: 390 },
-  { verticalX: 825, horizontalY: 550 },
-  { verticalX: 1170, horizontalY: 710 },
-  { verticalX: 1525, horizontalY: 870 }
-];
-
 const routeOverlapClearance = 24;
+const structureClearance = 10;
+const serviceAisleY = 930;
+const upperServiceAisleY = 80;
+const serviceAisleYs = [serviceAisleY, upperServiceAisleY];
+const safeAisleXs = [55, 245, 390, 590, 730, 920, 1070, 1270, 1425, 1625];
+const stationAccessGap = 25;
 const batteryDischargeIntervalMs = 5 * 60 * 1000;
 const batteryChargeIntervalMs = 60 * 1000;
 const lowBatteryThreshold = 20;
@@ -99,6 +77,10 @@ function stationCenter(id: string): Coordinate | undefined {
     return undefined;
   }
   return { x: station.x + station.width / 2, y: station.y + station.height / 2 };
+}
+
+function stationById(id: string) {
+  return mapSnapshot.stations.find((item) => item.id === id);
 }
 
 function chargerStations() {
@@ -205,42 +187,133 @@ function segmentsOverlap(activeStart: Coordinate, activeEnd: Coordinate, candida
   return overlap > routeOverlapClearance;
 }
 
-function routeProfilesForRobot(robotId: string) {
-  const profiles = [...(routeProfilesByRobot[robotId] ?? []), ...sharedRouteProfiles];
-  return profiles.filter(
-    (profile, index) =>
-      profiles.findIndex((item) => item.verticalX === profile.verticalX && item.horizontalY === profile.horizontalY) === index
+function accessCoordinates(id: string, fallback: Coordinate, towardId?: string): Coordinate[] {
+  const station = stationById(id);
+  if (!station) {
+    return [locationCoordinate(id, fallback)];
+  }
+
+  if (station.type === "CHARGER") {
+    return [{ x: station.x + station.width / 2, y: station.y - stationAccessGap }];
+  }
+
+  const toward = towardId ? stationById(towardId) ?? robots.find((robot) => robot.id === towardId) : undefined;
+  const stationCenterX = station.x + station.width / 2;
+  const towardX = toward && "width" in toward ? toward.x + toward.width / 2 : toward?.x;
+  const exitsRight = towardX === undefined ? stationCenterX < mapSnapshot.width / 2 : towardX >= stationCenterX;
+  const leftAccess = { x: station.x - stationAccessGap, y: station.y + station.height / 2 };
+  const rightAccess = { x: station.x + station.width + stationAccessGap, y: station.y + station.height / 2 };
+  return exitsRight ? [rightAccess, leftAccess] : [leftAccess, rightAccess];
+}
+
+function solidStructureRects() {
+  return [
+    ...mapSnapshot.stations,
+    ...mapSnapshot.obstacles.filter((obstacle) => obstacle.type !== "FENCE")
+  ].map((rect) => ({
+    x: rect.x - structureClearance,
+    y: rect.y - structureClearance,
+    width: rect.width + structureClearance * 2,
+    height: rect.height + structureClearance * 2
+  }));
+}
+
+function pointInsideRect(point: Coordinate, rect: { x: number; y: number; width: number; height: number }) {
+  return point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
+function orientation(left: Coordinate, right: Coordinate, point: Coordinate) {
+  const value = (right.y - left.y) * (point.x - right.x) - (right.x - left.x) * (point.y - right.y);
+  if (Math.abs(value) < 0.0001) {
+    return 0;
+  }
+  return value > 0 ? 1 : 2;
+}
+
+function onSegment(left: Coordinate, point: Coordinate, right: Coordinate) {
+  return (
+    point.x <= Math.max(left.x, right.x) &&
+    point.x >= Math.min(left.x, right.x) &&
+    point.y <= Math.max(left.y, right.y) &&
+    point.y >= Math.min(left.y, right.y)
   );
 }
 
-function orthogonalPath(from: Coordinate, to: Coordinate, profile: RouteProfile, firstAxis: "x" | "y") {
-  if (firstAxis === "x") {
-    return cleanRoute([from, { x: profile.verticalX, y: from.y }, { x: profile.verticalX, y: to.y }, to]);
+function lineSegmentsIntersect(leftStart: Coordinate, leftEnd: Coordinate, rightStart: Coordinate, rightEnd: Coordinate) {
+  const o1 = orientation(leftStart, leftEnd, rightStart);
+  const o2 = orientation(leftStart, leftEnd, rightEnd);
+  const o3 = orientation(rightStart, rightEnd, leftStart);
+  const o4 = orientation(rightStart, rightEnd, leftEnd);
+
+  if (o1 !== o2 && o3 !== o4) {
+    return true;
   }
-  return cleanRoute([from, { x: from.x, y: profile.horizontalY }, { x: to.x, y: profile.horizontalY }, to]);
+  return (
+    (o1 === 0 && onSegment(leftStart, rightStart, leftEnd)) ||
+    (o2 === 0 && onSegment(leftStart, rightEnd, leftEnd)) ||
+    (o3 === 0 && onSegment(rightStart, leftStart, rightEnd)) ||
+    (o4 === 0 && onSegment(rightStart, leftEnd, rightEnd))
+  );
+}
+
+function segmentIntersectsRect(start: Coordinate, end: Coordinate, rect: { x: number; y: number; width: number; height: number }) {
+  if (pointInsideRect(start, rect) || pointInsideRect(end, rect)) {
+    return true;
+  }
+
+  const topLeft = { x: rect.x, y: rect.y };
+  const topRight = { x: rect.x + rect.width, y: rect.y };
+  const bottomRight = { x: rect.x + rect.width, y: rect.y + rect.height };
+  const bottomLeft = { x: rect.x, y: rect.y + rect.height };
+  return [
+    [topLeft, topRight],
+    [topRight, bottomRight],
+    [bottomRight, bottomLeft],
+    [bottomLeft, topLeft]
+  ].some(([edgeStart, edgeEnd]) => lineSegmentsIntersect(start, end, edgeStart, edgeEnd));
+}
+
+function routeIntersectsStructures(route: Coordinate[]) {
+  const rects = solidStructureRects();
+  return segmentPairs(route).some(([start, end]) => rects.some((rect) => segmentIntersectsRect(start, end, rect)));
+}
+
+function routeViaServiceAisle(from: Coordinate, to: Coordinate, y: number, viaX = from.x) {
+  return cleanRoute([from, { x: viaX, y: from.y }, { x: viaX, y }, { x: to.x, y }, to]);
+}
+
+function safePathCandidates(from: Coordinate, to: Coordinate) {
+  const candidates = [
+    cleanRoute([from, to]),
+    ...serviceAisleYs.flatMap((y) => [from.x, ...safeAisleXs].map((viaX) => routeViaServiceAisle(from, to, y, viaX)))
+  ];
+  return candidates.filter((route) => !routeIntersectsStructures(route)).sort((left, right) => routeDistance(left) - routeDistance(right));
 }
 
 function buildRouteCandidates(robot: Robot, task: Task) {
   const start = { x: robot.x, y: robot.y };
-  const source = locationCoordinate(task.source, start);
-  const target = locationCoordinate(task.target, source);
-  const candidates: Coordinate[][] = [];
+  const routes: Coordinate[][] = [];
 
-  for (const profile of routeProfilesForRobot(robot.id)) {
-    for (const firstLegAxis of ["x", "y"] as const) {
-      for (const secondLegAxis of ["x", "y"] as const) {
-        candidates.push(
-          cleanRoute([...orthogonalPath(start, source, profile, firstLegAxis), ...orthogonalPath(source, target, profile, secondLegAxis).slice(1)])
-        );
+  for (const source of accessCoordinates(task.source, start, task.target)) {
+    const toSourceCandidates = safePathCandidates(start, source);
+    if (!toSourceCandidates.length) {
+      continue;
+    }
+
+    for (const target of accessCoordinates(task.target, source, task.source)) {
+      const toTargetCandidates = safePathCandidates(source, target);
+      for (const toSource of toSourceCandidates) {
+        for (const toTarget of toTargetCandidates) {
+          const route = cleanRoute([...toSource, ...toTarget.slice(1)]);
+          if (!routeIntersectsStructures(route)) {
+            routes.push(route);
+          }
+        }
       }
     }
   }
 
-  candidates.push(cleanRoute([start, source, target]));
-  return candidates.filter((route, index) => {
-    const signature = route.map((point) => `${Math.round(point.x)},${Math.round(point.y)}`).join("|");
-    return candidates.findIndex((candidate) => candidate.map((point) => `${Math.round(point.x)},${Math.round(point.y)}`).join("|") === signature) === index;
-  });
+  return routes.sort((left, right) => routeDistance(left) - routeDistance(right));
 }
 
 export class FmsStore {
@@ -304,17 +377,24 @@ export class FmsStore {
     }
 
     const generatedLimit = Math.min(idleRobots.length, 2);
-    for (let index = 0; index < generatedLimit; index += 1) {
+    let generatedThisRun = 0;
+    let attempts = 0;
+    while (generatedThisRun < generatedLimit && attempts < autoTaskTemplates.length) {
       const template = autoTaskTemplates[autoTaskState.cursor % autoTaskTemplates.length];
       autoTaskState.cursor += 1;
+      attempts += 1;
+      if (this.isTemplateCellBusy(template)) {
+        continue;
+      }
       const taskResult = this.createTask({
         ...template,
-        priority: 3 + ((autoTaskState.cursor + index) % 3)
+        priority: 3 + ((autoTaskState.cursor + generatedThisRun) % 3)
       });
       if ("error" in taskResult) {
         this.appendEvent("simulation.auto_task.failed", "simulation", { template, error: taskResult.error });
         continue;
       }
+      generatedThisRun += 1;
       autoTaskState.generatedCount += 1;
       autoTaskState.lastGeneratedAt = new Date(now).toISOString();
       autoTaskState.lastTaskId = taskResult.data.id;
@@ -767,6 +847,17 @@ export class FmsStore {
     return tasks.some(
       (task) => task.type === "GO_CHARGE" && task.source === robotId && !["COMPLETED", "CANCELED"].includes(task.status)
     );
+  }
+
+  private isTemplateCellBusy(template: Omit<CreateTaskInput, "priority">) {
+    const cells = [template.source, template.target].filter((cell): cell is string => Boolean(cell));
+    return cells.some((cell) => {
+      const reservedByRobot = robots.some((robot) => robot.reservedCells.includes(cell));
+      const reservedByTask = tasks.some(
+        (task) => !["COMPLETED", "CANCELED"].includes(task.status) && (task.source === cell || task.target === cell)
+      );
+      return reservedByRobot || reservedByTask;
+    });
   }
 
   private isRobotAtStation(robot: Robot, stationId: string) {

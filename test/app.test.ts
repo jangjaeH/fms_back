@@ -11,7 +11,17 @@ interface RouteRobot {
   route: Array<{ x: number; y: number }>;
 }
 
+interface FacilityRect {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 const routeOverlapClearance = 24;
+const structureClearance = 10;
 
 function routeSegments(route: RouteRobot["route"]) {
   const segments: Array<[RouteRobot["route"][number], RouteRobot["route"][number]]> = [];
@@ -89,6 +99,82 @@ function routesOverlap(leftRoute: RouteRobot["route"], rightRoute: RouteRobot["r
   return false;
 }
 
+function pointInsideRect(point: { x: number; y: number }, rect: FacilityRect) {
+  return point.x >= rect.x && point.x <= rect.x + rect.width && point.y >= rect.y && point.y <= rect.y + rect.height;
+}
+
+function orientation(left: { x: number; y: number }, right: { x: number; y: number }, point: { x: number; y: number }) {
+  const value = (right.y - left.y) * (point.x - right.x) - (right.x - left.x) * (point.y - right.y);
+  if (Math.abs(value) < 0.0001) {
+    return 0;
+  }
+  return value > 0 ? 1 : 2;
+}
+
+function onSegment(left: { x: number; y: number }, point: { x: number; y: number }, right: { x: number; y: number }) {
+  return (
+    point.x <= Math.max(left.x, right.x) &&
+    point.x >= Math.min(left.x, right.x) &&
+    point.y <= Math.max(left.y, right.y) &&
+    point.y >= Math.min(left.y, right.y)
+  );
+}
+
+function lineSegmentsIntersect(
+  leftStart: { x: number; y: number },
+  leftEnd: { x: number; y: number },
+  rightStart: { x: number; y: number },
+  rightEnd: { x: number; y: number }
+) {
+  const o1 = orientation(leftStart, leftEnd, rightStart);
+  const o2 = orientation(leftStart, leftEnd, rightEnd);
+  const o3 = orientation(rightStart, rightEnd, leftStart);
+  const o4 = orientation(rightStart, rightEnd, leftEnd);
+
+  if (o1 !== o2 && o3 !== o4) {
+    return true;
+  }
+  return (
+    (o1 === 0 && onSegment(leftStart, rightStart, leftEnd)) ||
+    (o2 === 0 && onSegment(leftStart, rightEnd, leftEnd)) ||
+    (o3 === 0 && onSegment(rightStart, leftStart, rightEnd)) ||
+    (o4 === 0 && onSegment(rightStart, leftEnd, rightEnd))
+  );
+}
+
+function segmentIntersectsRect(start: { x: number; y: number }, end: { x: number; y: number }, rect: FacilityRect) {
+  if (pointInsideRect(start, rect) || pointInsideRect(end, rect)) {
+    return true;
+  }
+
+  const topLeft = { x: rect.x, y: rect.y };
+  const topRight = { x: rect.x + rect.width, y: rect.y };
+  const bottomRight = { x: rect.x + rect.width, y: rect.y + rect.height };
+  const bottomLeft = { x: rect.x, y: rect.y + rect.height };
+  const edges: Array<[{ x: number; y: number }, { x: number; y: number }]> = [
+    [topLeft, topRight],
+    [topRight, bottomRight],
+    [bottomRight, bottomLeft],
+    [bottomLeft, topLeft]
+  ];
+  return edges.some(([edgeStart, edgeEnd]) => lineSegmentsIntersect(start, end, edgeStart, edgeEnd));
+}
+
+function solidStructureRects(map: { stations: FacilityRect[]; obstacles: FacilityRect[] }) {
+  return [...map.stations, ...map.obstacles.filter((obstacle) => obstacle.type !== "FENCE")].map((rect) => ({
+    ...rect,
+    x: rect.x - structureClearance,
+    y: rect.y - structureClearance,
+    width: rect.width + structureClearance * 2,
+    height: rect.height + structureClearance * 2
+  }));
+}
+
+function routeHitsStructures(route: RouteRobot["route"], map: { stations: FacilityRect[]; obstacles: FacilityRect[] }) {
+  const structures = solidStructureRects(map);
+  return routeSegments(route).some(([start, end]) => structures.some((rect) => segmentIntersectsRect(start, end, rect)));
+}
+
 describe("robot monitoring backend", () => {
   const app = createApp();
 
@@ -112,6 +198,15 @@ describe("robot monitoring backend", () => {
       for (let rightIndex = leftIndex + 1; rightIndex < activeRobots.length; rightIndex += 1) {
         expect(routesOverlap(activeRobots[leftIndex].route, activeRobots[rightIndex].route)).toBe(false);
       }
+    }
+  });
+
+  it("keeps seeded active robot routes outside facility structures", async () => {
+    const [robotsResponse, mapResponse] = await Promise.all([request(app).get("/robots"), request(app).get("/map")]);
+    const activeRobots = (robotsResponse.body as RouteRobot[]).filter((robot) => robot.missionId && robot.state !== "ERROR");
+
+    for (const robot of activeRobots) {
+      expect(routeHitsStructures(robot.route, mapResponse.body)).toBe(false);
     }
   });
 
@@ -172,11 +267,13 @@ describe("robot monitoring backend", () => {
     );
 
     const robotsResponse = await request(app).get("/robots");
+    const mapResponse = await request(app).get("/map");
     const dispatchedRobot = (robotsResponse.body as RouteRobot[]).find((robot) => robot.missionId === response.body.missionId);
     const otherActiveRobots = (robotsResponse.body as RouteRobot[]).filter(
       (robot) => robot.id !== dispatchedRobot?.id && robot.missionId && robot.state !== "ERROR"
     );
     expect(dispatchedRobot).toBeDefined();
+    expect(routeHitsStructures(dispatchedRobot?.route ?? [], mapResponse.body)).toBe(false);
     for (const robot of otherActiveRobots) {
       expect(routesOverlap(dispatchedRobot?.route ?? [], robot.route)).toBe(false);
     }
@@ -190,12 +287,12 @@ describe("robot monitoring backend", () => {
       state: "IDLE",
       missionId: null,
       battery: 20,
-      x: 260,
+      x: 245,
       y: 775,
       currentCell: "LOW-BATTERY",
       targetCell: null,
       reservedCells: [],
-      route: [{ x: 260, y: 775 }],
+      route: [{ x: 245, y: 775 }],
       routeIndex: 0
     });
 
@@ -212,10 +309,10 @@ describe("robot monitoring backend", () => {
       currentCell: "CH-01",
       targetCell: "CH-01",
       reservedCells: ["CH-01"],
-      route: [{ x: 170, y: 765 }],
+      route: [{ x: 145, y: 935 }],
       routeIndex: 0,
-      x: 170,
-      y: 765
+      x: 145,
+      y: 935
     });
 
     const chargeStart = Date.now();
