@@ -17,3 +17,13 @@ npm run dev
 ```
 
 기본 포트는 `4000`입니다.
+
+## Docker
+
+```bash
+docker compose -f ../docker-compose.yml up --build
+```
+
+- API: `http://localhost:4000`
+- Health check: `http://localhost:4000/health`
+- `POST /tasks` 또는 `POST /missions`로 Task를 생성하면 가용 로봇에 즉시 Mission이 배정됩니다.

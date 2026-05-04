@@ -76,6 +76,21 @@ export const registerRoutes = (app: Express) => {
     response.json(store.getActiveMissions());
   });
 
+  app.post("/missions", (request, response) => {
+    const { type, priority, source, target, memo } = request.body;
+    if (!type || priority === undefined || !source) {
+      response.status(400).json({ message: "type, priority, and source are required" });
+      return;
+    }
+    const task = store.createTask({ type, priority, source, target, memo });
+    if ("error" in task) {
+      response.status(task.status ?? 400).json({ message: task.error });
+      return;
+    }
+    const mission = store.getMissions().find((item) => item.id === task.data.missionId) ?? null;
+    response.status(201).json({ task: task.data, mission });
+  });
+
   app.patch("/missions/:id", (request, response) => {
     const mission = store.updateMission(request.params.id, request.body);
     if (!mission) {

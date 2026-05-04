@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { alarms, equipment, events, getDashboardSummary, mapSnapshot, missions, robots, tasks } from "../data/mockData.js";
-import type { CreateTaskInput, EventItem, Mission, OverrideInput, Task, TaskType } from "../types.js";
+import type { Coordinate, CreateTaskInput, EventItem, Mission, OverrideInput, Robot, Task, TaskType } from "../types.js";
 
 const validTaskTypes: TaskType[] = ["MOVE", "PICK", "DROP", "GO_CHARGE"];
 const validOverrideActions: OverrideInput["action"][] = ["PAUSE", "RESUME", "CANCEL", "REASSIGN"];
@@ -10,6 +10,49 @@ interface EventFilters {
   type?: string;
   source?: string;
   q?: string;
+}
+
+const missionStepByTaskType: Record<TaskType, string> = {
+  MOVE: "MOVE_TO_TARGET",
+  PICK: "MOVE_TO_PICK",
+  DROP: "MOVE_TO_DROP",
+  GO_CHARGE: "MOVE_TO_CHARGER"
+};
+
+function nextDomainId(prefix: "T" | "M", existingIds: string[]) {
+  let next = Math.floor(Math.random() * 9000 + 1000);
+  while (existingIds.includes(`${prefix}-${next}`)) {
+    next = Math.floor(Math.random() * 9000 + 1000);
+  }
+  return `${prefix}-${next}`;
+}
+
+function stationCenter(id: string): Coordinate | undefined {
+  const station = mapSnapshot.stations.find((item) => item.id === id);
+  if (!station) {
+    return undefined;
+  }
+  return { x: station.x + station.width / 2, y: station.y + station.height / 2 };
+}
+
+function locationCoordinate(id: string, fallback: Coordinate): Coordinate {
+  const station = stationCenter(id);
+  if (station) {
+    return station;
+  }
+
+  const robot = robots.find((item) => item.id === id);
+  if (robot) {
+    return { x: robot.x, y: robot.y };
+  }
+
+  const bufferLane = mapSnapshot.lanes.find((lane) => lane.id === "LANE-MAIN")?.points ?? [];
+  const bufferPoint = bufferLane[Math.abs([...id].reduce((sum, char) => sum + char.charCodeAt(0), 0)) % bufferLane.length];
+  return bufferPoint ?? fallback;
+}
+
+function headingBetween(from: Coordinate, to: Coordinate) {
+  return Math.round(((Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI + 360) % 360);
 }
 
 export class FmsStore {
@@ -27,14 +70,20 @@ export class FmsStore {
 
   tickRobotPositions() {
     const speedPerTick = 28;
+    let completedAnyMission = false;
 
     for (const robot of robots) {
       if (robot.state !== "MOVING" || robot.route.length < 2) {
         continue;
       }
 
-      const targetIndex = robot.routeIndex % robot.route.length;
+      const targetIndex = robot.routeIndex;
       const target = robot.route[targetIndex];
+      if (!target) {
+        completedAnyMission = this.completeRobotMission(robot) || completedAnyMission;
+        continue;
+      }
+
       const dx = target.x - robot.x;
       const dy = target.y - robot.y;
       const distance = Math.hypot(dx, dy);
@@ -50,12 +99,23 @@ export class FmsStore {
 
       robot.heading = Math.round(((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360);
       robot.currentCell = `X${Math.round(robot.x)} Y${Math.round(robot.y)}`;
+      this.updateMissionProgress(robot);
+
+      if (distance <= speedPerTick && robot.routeIndex >= robot.route.length - 1) {
+        completedAnyMission = this.completeRobotMission(robot) || completedAnyMission;
+        continue;
+      }
+
       this.appendEvent("robot.position", robot.id, {
         robotId: robot.id,
         x: Math.round(robot.x),
         y: Math.round(robot.y),
         heading: robot.heading
       });
+    }
+
+    if (completedAnyMission) {
+      this.dispatchQueuedTasks();
     }
   }
 
@@ -92,7 +152,7 @@ export class FmsStore {
     }
 
     const task: Task = {
-      id: `T-${Math.floor(Math.random() * 9000 + 1000)}`,
+      id: nextDomainId("T", tasks.map((item) => item.id)),
       status: "QUEUED",
       createdAt: new Date().toISOString(),
       type: input.type,
@@ -103,6 +163,7 @@ export class FmsStore {
     };
     tasks.unshift(task);
     this.appendEvent("task.created", task.id, { ...task });
+    this.dispatchTask(task);
     return { data: task } as const;
   }
 
@@ -125,7 +186,18 @@ export class FmsStore {
       return { error: "Running tasks cannot be canceled", status: 409 } as const;
     }
     task.status = "CANCELED";
+    const mission = missions.find((item) => item.taskId === task.id && item.state !== "COMPLETED");
+    if (mission) {
+      mission.state = "COMPLETED";
+      mission.progress = 100;
+      mission.currentStep = "CANCELED";
+      const robot = robots.find((item) => item.id === mission.robotId);
+      if (robot) {
+        this.releaseRobot(robot);
+      }
+    }
     this.appendEvent("task.canceled", id, { id });
+    this.dispatchQueuedTasks();
     return { data: task } as const;
   }
 
@@ -162,9 +234,17 @@ export class FmsStore {
     mission.needsManualOverride = false;
     if (input.action === "PAUSE") {
       mission.state = "PAUSED";
+      const robot = robots.find((item) => item.id === mission.robotId);
+      if (robot) {
+        robot.state = "WAITING_PATH";
+      }
     }
     if (input.action === "RESUME") {
       mission.state = "RUNNING";
+      const robot = robots.find((item) => item.id === mission.robotId);
+      if (robot) {
+        robot.state = "MOVING";
+      }
     }
     if (input.action === "CANCEL") {
       mission.state = "COMPLETED";
@@ -172,9 +252,29 @@ export class FmsStore {
       if (linkedTask) {
         linkedTask.status = "CANCELED";
       }
+      const robot = robots.find((item) => item.id === mission.robotId);
+      if (robot) {
+        this.releaseRobot(robot);
+      }
     }
     if (input.action === "REASSIGN" && input.targetRobotId) {
+      const previousRobot = robots.find((item) => item.id === mission.robotId);
+      const nextRobot = robots.find((item) => item.id === input.targetRobotId);
+      const linkedTask = tasks.find((task) => task.id === mission.taskId);
+      if (!nextRobot) {
+        return { error: "Target robot not found", status: 404 } as const;
+      }
+      if (nextRobot.missionId && nextRobot.missionId !== mission.id) {
+        return { error: "Target robot already has an active mission", status: 409 } as const;
+      }
+      if (previousRobot && previousRobot.id !== nextRobot.id) {
+        this.releaseRobot(previousRobot);
+      }
       mission.robotId = input.targetRobotId;
+      mission.state = "RUNNING";
+      if (linkedTask) {
+        this.assignMissionToRobot(nextRobot, mission, linkedTask);
+      }
     }
     this.appendEvent("mission.override.applied", id, {
       operator: input.operator,
@@ -275,6 +375,124 @@ export class FmsStore {
     if (events.length > 300) {
       events.pop();
     }
+  }
+
+  private dispatchQueuedTasks() {
+    for (const task of [...tasks].filter((item) => item.status === "QUEUED").sort((left, right) => right.priority - left.priority)) {
+      this.dispatchTask(task);
+    }
+  }
+
+  private dispatchTask(task: Task) {
+    if (task.status !== "QUEUED") {
+      return missions.find((mission) => mission.taskId === task.id);
+    }
+
+    const robot = this.findDispatchRobot(task);
+    if (!robot) {
+      this.appendEvent("mission.dispatch.waiting", task.id, { taskId: task.id, reason: "no_available_robot" });
+      return undefined;
+    }
+
+    const mission: Mission = {
+      id: nextDomainId("M", missions.map((item) => item.id)),
+      robotId: robot.id,
+      taskId: task.id,
+      state: "RUNNING",
+      currentStep: missionStepByTaskType[task.type],
+      progress: 0,
+      needsManualOverride: false
+    };
+
+    missions.unshift(mission);
+    task.status = "ASSIGNED";
+    task.missionId = mission.id;
+    this.assignMissionToRobot(robot, mission, task);
+    this.appendEvent("mission.created", mission.id, { ...mission, task });
+    return mission;
+  }
+
+  private findDispatchRobot(task: Task) {
+    const hasEnoughBattery = (robot: Robot) => task.type === "GO_CHARGE" || robot.battery >= 35;
+    const isAvailable = (robot: Robot) => robot.state !== "ERROR" && !robot.missionId && hasEnoughBattery(robot);
+    const sourceRobot = robots.find((robot) => robot.id === task.source && isAvailable(robot));
+    if (sourceRobot) {
+      return sourceRobot;
+    }
+
+    const source = locationCoordinate(task.source, { x: 500, y: 500 });
+    return robots
+      .filter(isAvailable)
+      .sort((left, right) => Math.hypot(left.x - source.x, left.y - source.y) - Math.hypot(right.x - source.x, right.y - source.y))[0];
+  }
+
+  private assignMissionToRobot(robot: Robot, mission: Mission, task: Task) {
+    const start = { x: robot.x, y: robot.y };
+    const source = locationCoordinate(task.source, start);
+    const target = locationCoordinate(task.target, source);
+    robot.state = "MOVING";
+    robot.missionId = mission.id;
+    robot.targetCell = task.target;
+    robot.reservedCells = [task.source, task.target];
+    robot.route = [start, source, target];
+    robot.routeIndex = 1;
+    robot.heading = headingBetween(start, source);
+    this.appendEvent("mission.dispatched", mission.id, {
+      missionId: mission.id,
+      taskId: task.id,
+      robotId: robot.id,
+      route: robot.route
+    });
+  }
+
+  private updateMissionProgress(robot: Robot) {
+    if (!robot.missionId || robot.route.length < 2) {
+      return;
+    }
+    const mission = missions.find((item) => item.id === robot.missionId);
+    if (!mission || mission.state !== "RUNNING") {
+      return;
+    }
+    const completedLegs = Math.max(0, robot.routeIndex - 1);
+    const totalLegs = Math.max(1, robot.route.length - 1);
+    mission.progress = Math.max(mission.progress, Math.min(99, Math.round((completedLegs / totalLegs) * 100)));
+  }
+
+  private completeRobotMission(robot: Robot) {
+    if (!robot.missionId) {
+      this.releaseRobot(robot);
+      return false;
+    }
+
+    const mission = missions.find((item) => item.id === robot.missionId);
+    const task = mission ? tasks.find((item) => item.id === mission.taskId) : undefined;
+    if (!mission) {
+      this.releaseRobot(robot);
+      return false;
+    }
+
+    mission.state = "COMPLETED";
+    mission.currentStep = "COMPLETED";
+    mission.progress = 100;
+    if (task) {
+      task.status = "COMPLETED";
+    }
+    this.appendEvent("mission.completed", mission.id, {
+      missionId: mission.id,
+      taskId: mission.taskId,
+      robotId: robot.id
+    });
+    this.releaseRobot(robot);
+    return true;
+  }
+
+  private releaseRobot(robot: Robot) {
+    robot.state = "IDLE";
+    robot.missionId = null;
+    robot.targetCell = null;
+    robot.reservedCells = [];
+    robot.route = [{ x: robot.x, y: robot.y }];
+    robot.routeIndex = 0;
   }
 }
 

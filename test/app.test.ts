@@ -18,7 +18,7 @@ describe("robot monitoring backend", () => {
     });
   });
 
-  it("creates a task", async () => {
+  it("creates a task and dispatches it into a mission", async () => {
     const response = await request(app).post("/tasks").send({
       type: "MOVE",
       priority: 2,
@@ -27,8 +27,40 @@ describe("robot monitoring backend", () => {
     });
 
     expect(response.status).toBe(201);
-    expect(response.body.status).toBe("QUEUED");
+    expect(response.body.status).toBe("ASSIGNED");
     expect(response.body.id).toContain("T-");
+    expect(response.body.missionId).toContain("M-");
+
+    const missionsResponse = await request(app).get("/missions");
+    expect(missionsResponse.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: response.body.missionId,
+          taskId: response.body.id,
+          state: "RUNNING"
+        })
+      ])
+    );
+  });
+
+  it("creates a mission directly from the mission endpoint", async () => {
+    const response = await request(app).post("/missions").send({
+      type: "GO_CHARGE",
+      priority: 3,
+      source: "R-03"
+    });
+
+    expect(response.status).toBe(201);
+    expect(response.body.task).toMatchObject({
+      type: "GO_CHARGE",
+      target: "CH-01"
+    });
+    if (response.body.mission) {
+      expect(response.body.mission).toMatchObject({
+        taskId: response.body.task.id,
+        state: "RUNNING"
+      });
+    }
   });
 
   it("rejects an invalid task request", async () => {

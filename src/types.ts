@@ -43,6 +43,7 @@ export interface Task {
   status: TaskStatus;
   source: string;
   target: string;
+  missionId?: string;
   memo?: string;
   createdAt: string;
 }
