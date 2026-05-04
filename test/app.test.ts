@@ -52,4 +52,31 @@ describe("robot monitoring backend", () => {
     expect(response.body.status).toBe("ACKED");
     expect(response.body.acknowledgedBy).toBe("operator.demo");
   });
+
+  it("filters events by type", async () => {
+    const response = await request(app).get("/events").query({ type: "alarm.raised" });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "alarm.raised"
+        })
+      ])
+    );
+    expect(response.body.every((event: { type: string }) => event.type === "alarm.raised")).toBe(true);
+  });
+
+  it("resets faulted equipment and appends an event", async () => {
+    const response = await request(app).post("/equipment/EQ-03/reset").send({});
+
+    expect(response.status).toBe(200);
+    expect(response.body.state).toBe("READY");
+
+    const eventsResponse = await request(app).get("/events").query({ type: "equipment.state.changed", source: "EQ-03" });
+    expect(eventsResponse.body[0]).toMatchObject({
+      type: "equipment.state.changed",
+      source: "EQ-03"
+    });
+  });
 });

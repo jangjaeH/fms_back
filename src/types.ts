@@ -7,6 +7,11 @@ export type TaskType = "MOVE" | "PICK" | "DROP" | "GO_CHARGE";
 export type TaskStatus = "QUEUED" | "ASSIGNED" | "RUNNING" | "COMPLETED" | "CANCELED";
 export type OverrideAction = "PAUSE" | "RESUME" | "CANCEL" | "REASSIGN";
 
+export interface Coordinate {
+  x: number;
+  y: number;
+}
+
 export interface DashboardSummary {
   activeRobots: number;
   pendingTasks: number;
@@ -25,6 +30,10 @@ export interface Robot {
   missionId: string | null;
   x: number;
   y: number;
+  heading: number;
+  radius: number;
+  route: Coordinate[];
+  routeIndex: number;
 }
 
 export interface Task {
@@ -80,7 +89,10 @@ export interface Equipment {
 export interface MapSnapshot {
   width: number;
   height: number;
-  stations: Array<{ id: string; label: string; x: number; y: number; type: string }>;
+  stations: Array<{ id: string; label: string; x: number; y: number; width: number; height: number; type: string }>;
+  zones: Array<{ id: string; label: string; x: number; y: number; width: number; height: number; type: string }>;
+  obstacles: Array<{ id: string; label: string; x: number; y: number; width: number; height: number; type: string }>;
+  lanes: Array<{ id: string; label: string; width: number; points: Coordinate[] }>;
   blockedCells: string[];
 }
 

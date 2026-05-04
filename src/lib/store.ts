@@ -6,6 +6,12 @@ import type { CreateTaskInput, EventItem, Mission, OverrideInput, Task, TaskType
 const validTaskTypes: TaskType[] = ["MOVE", "PICK", "DROP", "GO_CHARGE"];
 const validOverrideActions: OverrideInput["action"][] = ["PAUSE", "RESUME", "CANCEL", "REASSIGN"];
 
+interface EventFilters {
+  type?: string;
+  source?: string;
+  q?: string;
+}
+
 export class FmsStore {
   getDashboardSummary() {
     return getDashboardSummary();
@@ -17,6 +23,40 @@ export class FmsStore {
 
   getRobots() {
     return robots;
+  }
+
+  tickRobotPositions() {
+    const speedPerTick = 28;
+
+    for (const robot of robots) {
+      if (robot.state !== "MOVING" || robot.route.length < 2) {
+        continue;
+      }
+
+      const targetIndex = robot.routeIndex % robot.route.length;
+      const target = robot.route[targetIndex];
+      const dx = target.x - robot.x;
+      const dy = target.y - robot.y;
+      const distance = Math.hypot(dx, dy);
+
+      if (distance <= speedPerTick) {
+        robot.x = target.x;
+        robot.y = target.y;
+        robot.routeIndex = (robot.routeIndex + 1) % robot.route.length;
+      } else {
+        robot.x += (dx / distance) * speedPerTick;
+        robot.y += (dy / distance) * speedPerTick;
+      }
+
+      robot.heading = Math.round(((Math.atan2(dy, dx) * 180) / Math.PI + 360) % 360);
+      robot.currentCell = `X${Math.round(robot.x)} Y${Math.round(robot.y)}`;
+      this.appendEvent("robot.position", robot.id, {
+        robotId: robot.id,
+        x: Math.round(robot.x),
+        y: Math.round(robot.y),
+        heading: robot.heading
+      });
+    }
   }
 
   getRobot(id: string) {
@@ -193,13 +233,31 @@ export class FmsStore {
     return { data: alarm } as const;
   }
 
-  getEvents() {
-    return [...events].sort((left, right) => right.timestamp.localeCompare(left.timestamp));
+  getEvents(filters: EventFilters = {}) {
+    const type = filters.type?.trim();
+    const source = filters.source?.trim().toLowerCase();
+    const query = filters.q?.trim().toLowerCase();
+
+    return [...events]
+      .filter((event) => {
+        if (type && event.type !== type) {
+          return false;
+        }
+        if (source && !event.source.toLowerCase().includes(source)) {
+          return false;
+        }
+        if (query) {
+          const haystack = `${event.id} ${event.type} ${event.source} ${JSON.stringify(event.payload)}`.toLowerCase();
+          return haystack.includes(query);
+        }
+        return true;
+      })
+      .sort((left, right) => right.timestamp.localeCompare(left.timestamp));
   }
 
-  exportEventsCsv() {
+  exportEventsCsv(filters: EventFilters = {}) {
     const header = "id,type,source,timestamp,payload";
-    const rows = this.getEvents().map((event) =>
+    const rows = this.getEvents(filters).map((event) =>
       [event.id, event.type, event.source, event.timestamp, JSON.stringify(event.payload).replaceAll('"', '""')].join(",")
     );
     return [header, ...rows].join("\n");
@@ -214,6 +272,9 @@ export class FmsStore {
       payload
     };
     events.unshift(event);
+    if (events.length > 300) {
+      events.pop();
+    }
   }
 }
 

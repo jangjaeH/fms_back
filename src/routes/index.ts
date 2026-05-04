@@ -130,12 +130,24 @@ export const registerRoutes = (app: Express) => {
     response.json(alarm.data);
   });
 
-  app.get("/events", (_request, response) => {
-    response.json(store.getEvents());
+  app.get("/events", (request, response) => {
+    response.json(
+      store.getEvents({
+        type: typeof request.query.type === "string" ? request.query.type : undefined,
+        source: typeof request.query.source === "string" ? request.query.source : undefined,
+        q: typeof request.query.q === "string" ? request.query.q : undefined
+      })
+    );
   });
 
-  app.get("/events/export", (_request, response) => {
+  app.get("/events/export", (request, response) => {
     response.setHeader("Content-Type", "text/csv");
-    response.send(store.exportEventsCsv());
+    response.send(
+      store.exportEventsCsv({
+        type: typeof request.query.type === "string" ? request.query.type : undefined,
+        source: typeof request.query.source === "string" ? request.query.source : undefined,
+        q: typeof request.query.q === "string" ? request.query.q : undefined
+      })
+    );
   });
 };
