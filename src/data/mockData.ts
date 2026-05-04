@@ -63,7 +63,7 @@ export const robots: Robot[] = [
   {
     id: "R-02",
     name: "Atlas-02",
-    state: "WAITING_PATH",
+    state: "MOVING",
     battery: 64,
     currentCell: "LINE-05",
     targetCell: "SEC-05",
@@ -114,7 +114,7 @@ export const tasks: Task[] = [
     id: "T-1002",
     type: "MOVE",
     priority: 4,
-    status: "RUNNING",
+    status: "ASSIGNED",
     source: "INV-05",
     target: "SEC-05",
     missionId: "M-1002",
@@ -145,23 +145,24 @@ export const missions: Mission[] = [
     id: "M-1002",
     robotId: "R-02",
     taskId: "T-1002",
-    state: "PAUSED",
-    currentStep: "WAIT_FOR_PATH",
+    state: "RUNNING",
+    currentStep: "MOVE_TO_TARGET",
     progress: 45,
-    needsManualOverride: true
+    needsManualOverride: false
   }
 ];
 
 export const alarms: Alarm[] = [
   {
     id: "A-1001",
-    severity: "CRITICAL",
-    title: "Robot wait timeout",
+    severity: "MINOR",
+    title: "Traffic route replanned",
     source: "traffic-controller",
-    status: "OPEN",
+    status: "ACKED",
     robotId: "R-02",
     missionId: "M-1002",
-    createdAt: "2026-04-29T08:25:00.000Z"
+    createdAt: "2026-04-29T08:25:00.000Z",
+    acknowledgedBy: "system"
   },
   {
     id: "A-1002",
@@ -193,9 +194,9 @@ export const events: EventItem[] = [
   {
     id: "E-1002",
     type: "alarm.raised",
-    source: "A-1001",
+    source: "A-1003",
     timestamp: "2026-04-29T08:25:00.000Z",
-    payload: { severity: "CRITICAL", robotId: "R-02" }
+    payload: { severity: "MAJOR", equipmentId: "EQ-03" }
   },
   {
     id: "E-1003",

@@ -210,6 +210,22 @@ describe("robot monitoring backend", () => {
     }
   });
 
+  it("starts the second seeded robot on its available route", async () => {
+    const [robotsResponse, missionsResponse] = await Promise.all([request(app).get("/robots"), request(app).get("/missions")]);
+    const robot = (robotsResponse.body as RouteRobot[]).find((item) => item.id === "R-02");
+    const mission = missionsResponse.body.find((item: { id: string }) => item.id === "M-1002");
+
+    expect(robot).toMatchObject({
+      state: "MOVING",
+      missionId: "M-1002"
+    });
+    expect(mission).toMatchObject({
+      state: "RUNNING",
+      currentStep: "MOVE_TO_TARGET",
+      needsManualOverride: false
+    });
+  });
+
   it("exposes the wide production line and two charging stations on the facility map", async () => {
     const response = await request(app).get("/map");
     const stationCountByType = (type: string) =>
@@ -377,7 +393,7 @@ describe("robot monitoring backend", () => {
   });
 
   it("acknowledges an open alarm", async () => {
-    const response = await request(app).patch("/alarms/A-1001/ack").send({
+    const response = await request(app).patch("/alarms/A-1003/ack").send({
       user: "operator.demo"
     });
 
