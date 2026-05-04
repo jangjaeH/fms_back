@@ -47,8 +47,8 @@ export const robots: Robot[] = [
     routeIndex: 1,
     route: [
       { x: 640, y: 330 },
-      { x: 640, y: 610 },
-      { x: 405, y: 610 },
+      { x: 600, y: 330 },
+      { x: 600, y: 475 },
       { x: 405, y: 475 }
     ]
   },

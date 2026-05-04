@@ -12,12 +12,46 @@ interface EventFilters {
   q?: string;
 }
 
+interface DispatchPlan {
+  robot: Robot;
+  route: Coordinate[];
+}
+
+interface RouteProfile {
+  verticalX: number;
+  horizontalY: number;
+}
+
 const missionStepByTaskType: Record<TaskType, string> = {
   MOVE: "MOVE_TO_TARGET",
   PICK: "MOVE_TO_PICK",
   DROP: "MOVE_TO_DROP",
   GO_CHARGE: "MOVE_TO_CHARGER"
 };
+
+const routeProfilesByRobot: Record<string, RouteProfile[]> = {
+  "R-01": [
+    { verticalX: 805, horizontalY: 610 },
+    { verticalX: 780, horizontalY: 710 }
+  ],
+  "R-02": [
+    { verticalX: 600, horizontalY: 475 },
+    { verticalX: 640, horizontalY: 330 }
+  ],
+  "R-03": [
+    { verticalX: 170, horizontalY: 775 },
+    { verticalX: 220, horizontalY: 700 }
+  ]
+};
+
+const sharedRouteProfiles: RouteProfile[] = [
+  { verticalX: 220, horizontalY: 540 },
+  { verticalX: 405, horizontalY: 475 },
+  { verticalX: 600, horizontalY: 700 },
+  { verticalX: 805, horizontalY: 710 }
+];
+
+const routeOverlapClearance = 24;
 
 const autoTaskTemplates: Array<Omit<CreateTaskInput, "priority">> = [
   { type: "PICK", source: "PICK-01", target: "ST-08", memo: "auto: receiving dock to rack buffer" },
@@ -73,6 +107,115 @@ function locationCoordinate(id: string, fallback: Coordinate): Coordinate {
 
 function headingBetween(from: Coordinate, to: Coordinate) {
   return Math.round(((Math.atan2(to.y - from.y, to.x - from.x) * 180) / Math.PI + 360) % 360);
+}
+
+function cleanRoute(route: Coordinate[]) {
+  return route.filter((point, index) => {
+    const previous = route[index - 1];
+    return !previous || previous.x !== point.x || previous.y !== point.y;
+  });
+}
+
+function segmentPairs(route: Coordinate[]) {
+  const segments: Array<[Coordinate, Coordinate]> = [];
+  for (let index = 1; index < route.length; index += 1) {
+    const from = route[index - 1];
+    const to = route[index];
+    if (from.x !== to.x || from.y !== to.y) {
+      segments.push([from, to]);
+    }
+  }
+  return segments;
+}
+
+function cross(left: Coordinate, right: Coordinate) {
+  return left.x * right.y - left.y * right.x;
+}
+
+function dot(left: Coordinate, right: Coordinate) {
+  return left.x * right.x + left.y * right.y;
+}
+
+function pointToLineDistance(point: Coordinate, start: Coordinate, end: Coordinate) {
+  const line = { x: end.x - start.x, y: end.y - start.y };
+  const length = Math.hypot(line.x, line.y);
+  if (!length) {
+    return Math.hypot(point.x - start.x, point.y - start.y);
+  }
+  return Math.abs(cross({ x: point.x - start.x, y: point.y - start.y }, line)) / length;
+}
+
+function routeDistance(route: Coordinate[]) {
+  return segmentPairs(route).reduce((total, [from, to]) => total + Math.hypot(to.x - from.x, to.y - from.y), 0);
+}
+
+function segmentsOverlap(activeStart: Coordinate, activeEnd: Coordinate, candidateStart: Coordinate, candidateEnd: Coordinate) {
+  const activeVector = { x: activeEnd.x - activeStart.x, y: activeEnd.y - activeStart.y };
+  const candidateVector = { x: candidateEnd.x - candidateStart.x, y: candidateEnd.y - candidateStart.y };
+  const activeLength = Math.hypot(activeVector.x, activeVector.y);
+  const candidateLength = Math.hypot(candidateVector.x, candidateVector.y);
+  if (!activeLength || !candidateLength) {
+    return false;
+  }
+
+  const parallelScale = Math.abs(cross(activeVector, candidateVector)) / (activeLength * candidateLength);
+  if (parallelScale > 0.08) {
+    return false;
+  }
+
+  const distanceToCandidateLine = Math.min(
+    pointToLineDistance(candidateStart, activeStart, activeEnd),
+    pointToLineDistance(candidateEnd, activeStart, activeEnd)
+  );
+  if (distanceToCandidateLine > routeOverlapClearance) {
+    return false;
+  }
+
+  const activeUnit = { x: activeVector.x / activeLength, y: activeVector.y / activeLength };
+  const candidateStartProjection = dot({ x: candidateStart.x - activeStart.x, y: candidateStart.y - activeStart.y }, activeUnit);
+  const candidateEndProjection = dot({ x: candidateEnd.x - activeStart.x, y: candidateEnd.y - activeStart.y }, activeUnit);
+  const candidateMin = Math.min(candidateStartProjection, candidateEndProjection);
+  const candidateMax = Math.max(candidateStartProjection, candidateEndProjection);
+  const overlap = Math.min(activeLength, candidateMax) - Math.max(0, candidateMin);
+  return overlap > routeOverlapClearance;
+}
+
+function routeProfilesForRobot(robotId: string) {
+  const profiles = [...(routeProfilesByRobot[robotId] ?? []), ...sharedRouteProfiles];
+  return profiles.filter(
+    (profile, index) =>
+      profiles.findIndex((item) => item.verticalX === profile.verticalX && item.horizontalY === profile.horizontalY) === index
+  );
+}
+
+function orthogonalPath(from: Coordinate, to: Coordinate, profile: RouteProfile, firstAxis: "x" | "y") {
+  if (firstAxis === "x") {
+    return cleanRoute([from, { x: profile.verticalX, y: from.y }, { x: profile.verticalX, y: to.y }, to]);
+  }
+  return cleanRoute([from, { x: from.x, y: profile.horizontalY }, { x: to.x, y: profile.horizontalY }, to]);
+}
+
+function buildRouteCandidates(robot: Robot, task: Task) {
+  const start = { x: robot.x, y: robot.y };
+  const source = locationCoordinate(task.source, start);
+  const target = locationCoordinate(task.target, source);
+  const candidates: Coordinate[][] = [];
+
+  for (const profile of routeProfilesForRobot(robot.id)) {
+    for (const firstLegAxis of ["x", "y"] as const) {
+      for (const secondLegAxis of ["x", "y"] as const) {
+        candidates.push(
+          cleanRoute([...orthogonalPath(start, source, profile, firstLegAxis), ...orthogonalPath(source, target, profile, secondLegAxis).slice(1)])
+        );
+      }
+    }
+  }
+
+  candidates.push(cleanRoute([start, source, target]));
+  return candidates.filter((route, index) => {
+    const signature = route.map((point) => `${Math.round(point.x)},${Math.round(point.y)}`).join("|");
+    return candidates.findIndex((candidate) => candidate.map((point) => `${Math.round(point.x)},${Math.round(point.y)}`).join("|") === signature) === index;
+  });
 }
 
 export class FmsStore {
@@ -361,13 +504,17 @@ export class FmsStore {
       if (nextRobot.missionId && nextRobot.missionId !== mission.id) {
         return { error: "Target robot already has an active mission", status: 409 } as const;
       }
+      const dispatchPlan = linkedTask ? this.buildDispatchPlanForRobot(nextRobot, linkedTask, [mission.id]) : undefined;
+      if (linkedTask && !dispatchPlan) {
+        return { error: "No collision-free route available for target robot", status: 409 } as const;
+      }
       if (previousRobot && previousRobot.id !== nextRobot.id) {
         this.releaseRobot(previousRobot);
       }
       mission.robotId = input.targetRobotId;
       mission.state = "RUNNING";
-      if (linkedTask) {
-        this.assignMissionToRobot(nextRobot, mission, linkedTask);
+      if (linkedTask && dispatchPlan) {
+        this.assignMissionToRobot(nextRobot, mission, linkedTask, dispatchPlan.route);
       }
     }
     this.appendEvent("mission.override.applied", id, {
@@ -486,15 +633,15 @@ export class FmsStore {
       return missions.find((mission) => mission.taskId === task.id);
     }
 
-    const robot = this.findDispatchRobot(task);
-    if (!robot) {
-      this.appendEvent("mission.dispatch.waiting", task.id, { taskId: task.id, reason: "no_available_robot" });
+    const dispatchPlan = this.findDispatchRobot(task);
+    if (!dispatchPlan) {
+      this.appendEvent("mission.dispatch.waiting", task.id, { taskId: task.id, reason: "no_available_collision_free_route" });
       return undefined;
     }
 
     const mission: Mission = {
       id: nextDomainId("M", missions.map((item) => item.id)),
-      robotId: robot.id,
+      robotId: dispatchPlan.robot.id,
       taskId: task.id,
       state: "RUNNING",
       currentStep: missionStepByTaskType[task.type],
@@ -505,7 +652,7 @@ export class FmsStore {
     missions.unshift(mission);
     task.status = "ASSIGNED";
     task.missionId = mission.id;
-    this.assignMissionToRobot(robot, mission, task);
+    this.assignMissionToRobot(dispatchPlan.robot, mission, task, dispatchPlan.route);
     this.appendEvent("mission.created", mission.id, { ...mission, task });
     return mission;
   }
@@ -515,26 +662,56 @@ export class FmsStore {
     const isAvailable = (robot: Robot) => robot.state !== "ERROR" && !robot.missionId && hasEnoughBattery(robot);
     const sourceRobot = robots.find((robot) => robot.id === task.source && isAvailable(robot));
     if (sourceRobot) {
-      return sourceRobot;
+      return this.buildDispatchPlanForRobot(sourceRobot, task);
     }
 
     const source = locationCoordinate(task.source, { x: 500, y: 500 });
-    return robots
+    const plans = robots
       .filter(isAvailable)
-      .sort((left, right) => Math.hypot(left.x - source.x, left.y - source.y) - Math.hypot(right.x - source.x, right.y - source.y))[0];
+      .sort((left, right) => Math.hypot(left.x - source.x, left.y - source.y) - Math.hypot(right.x - source.x, right.y - source.y))
+      .map((robot) => this.buildDispatchPlanForRobot(robot, task))
+      .filter((plan): plan is DispatchPlan => Boolean(plan));
+
+    return plans.sort((left, right) => routeDistance(left.route) - routeDistance(right.route))[0];
   }
 
-  private assignMissionToRobot(robot: Robot, mission: Mission, task: Task) {
-    const start = { x: robot.x, y: robot.y };
-    const source = locationCoordinate(task.source, start);
-    const target = locationCoordinate(task.target, source);
+  private buildDispatchPlanForRobot(robot: Robot, task: Task, ignoredMissionIds: string[] = []) {
+    const route = buildRouteCandidates(robot, task).find((candidate) => !this.routeOverlapsActiveRoute(candidate, robot.id, ignoredMissionIds));
+    if (!route) {
+      return undefined;
+    }
+    return { robot, route };
+  }
+
+  private routeOverlapsActiveRoute(candidateRoute: Coordinate[], robotId: string, ignoredMissionIds: string[] = []) {
+    const candidateSegments = segmentPairs(candidateRoute);
+    for (const robot of robots) {
+      if (robot.id === robotId || !robot.missionId || robot.state === "ERROR" || ignoredMissionIds.includes(robot.missionId)) {
+        continue;
+      }
+      const mission = missions.find((item) => item.id === robot.missionId);
+      if (!mission || mission.state === "COMPLETED") {
+        continue;
+      }
+      for (const [activeStart, activeEnd] of segmentPairs(robot.route)) {
+        for (const [candidateStart, candidateEnd] of candidateSegments) {
+          if (segmentsOverlap(activeStart, activeEnd, candidateStart, candidateEnd)) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  private assignMissionToRobot(robot: Robot, mission: Mission, task: Task, route: Coordinate[]) {
     robot.state = "MOVING";
     robot.missionId = mission.id;
     robot.targetCell = task.target;
     robot.reservedCells = [task.source, task.target];
-    robot.route = [start, source, target];
-    robot.routeIndex = 1;
-    robot.heading = headingBetween(start, source);
+    robot.route = route;
+    robot.routeIndex = route.length > 1 ? 1 : 0;
+    robot.heading = route.length > 1 ? headingBetween(route[0], route[1]) : robot.heading;
     this.appendEvent("mission.dispatched", mission.id, {
       missionId: mission.id,
       taskId: task.id,
