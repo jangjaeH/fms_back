@@ -1,4 +1,4 @@
-export type RobotState = "IDLE" | "MOVING" | "WAITING_PATH" | "ERROR";
+export type RobotState = "IDLE" | "MOVING" | "WAITING_PATH" | "CHARGING" | "ERROR";
 export type MissionState = "QUEUED" | "RUNNING" | "PAUSED" | "COMPLETED";
 export type AlarmSeverity = "CRITICAL" | "MAJOR" | "MINOR";
 export type AlarmStatus = "OPEN" | "ACKED" | "RESOLVED";
@@ -6,6 +6,11 @@ export type EquipmentState = "READY" | "BUSY" | "FAULT" | "OFFLINE";
 export type TaskType = "MOVE" | "PICK" | "DROP" | "GO_CHARGE";
 export type TaskStatus = "QUEUED" | "ASSIGNED" | "RUNNING" | "COMPLETED" | "CANCELED";
 export type OverrideAction = "PAUSE" | "RESUME" | "CANCEL" | "REASSIGN";
+
+export interface Coordinate {
+  x: number;
+  y: number;
+}
 
 export interface DashboardSummary {
   activeRobots: number;
@@ -25,6 +30,10 @@ export interface Robot {
   missionId: string | null;
   x: number;
   y: number;
+  heading: number;
+  radius: number;
+  route: Coordinate[];
+  routeIndex: number;
 }
 
 export interface Task {
@@ -34,6 +43,7 @@ export interface Task {
   status: TaskStatus;
   source: string;
   target: string;
+  missionId?: string;
   memo?: string;
   createdAt: string;
 }
@@ -80,7 +90,10 @@ export interface Equipment {
 export interface MapSnapshot {
   width: number;
   height: number;
-  stations: Array<{ id: string; label: string; x: number; y: number; type: string }>;
+  stations: Array<{ id: string; label: string; x: number; y: number; width: number; height: number; type: string }>;
+  zones: Array<{ id: string; label: string; x: number; y: number; width: number; height: number; type: string }>;
+  obstacles: Array<{ id: string; label: string; x: number; y: number; width: number; height: number; type: string }>;
+  lanes: Array<{ id: string; label: string; width: number; points: Coordinate[] }>;
   blockedCells: string[];
 }
 
@@ -97,4 +110,16 @@ export interface OverrideInput {
   action: OverrideAction;
   reason: string;
   targetRobotId?: string;
+}
+
+export interface AutoTaskStatus {
+  enabled: boolean;
+  intervalMs: number;
+  generatedCount: number;
+  lastGeneratedAt: string | null;
+  lastTaskId: string | null;
+  lastMissionId: string | null;
+  idleRobots: number;
+  queuedTasks: number;
+  activeMissions: number;
 }

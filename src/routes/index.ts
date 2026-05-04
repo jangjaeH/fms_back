@@ -32,6 +32,23 @@ export const registerRoutes = (app: Express) => {
     response.json(store.getRobotEvents(request.params.id));
   });
 
+  app.get("/simulation/auto-tasks", (_request, response) => {
+    response.json(store.getAutoTaskStatus());
+  });
+
+  app.patch("/simulation/auto-tasks", (request, response) => {
+    response.json(
+      store.updateAutoTaskStatus({
+        enabled: typeof request.body?.enabled === "boolean" ? request.body.enabled : undefined,
+        intervalMs: typeof request.body?.intervalMs === "number" ? request.body.intervalMs : undefined
+      })
+    );
+  });
+
+  app.post("/simulation/auto-tasks/run", (_request, response) => {
+    response.status(201).json(store.runAutoTaskScheduler({ force: true }));
+  });
+
   app.get("/tasks", (_request, response) => {
     response.json(store.getTasks());
   });
@@ -74,6 +91,21 @@ export const registerRoutes = (app: Express) => {
 
   app.get("/missions/active", (_request, response) => {
     response.json(store.getActiveMissions());
+  });
+
+  app.post("/missions", (request, response) => {
+    const { type, priority, source, target, memo } = request.body;
+    if (!type || priority === undefined || !source) {
+      response.status(400).json({ message: "type, priority, and source are required" });
+      return;
+    }
+    const task = store.createTask({ type, priority, source, target, memo });
+    if ("error" in task) {
+      response.status(task.status ?? 400).json({ message: task.error });
+      return;
+    }
+    const mission = store.getMissions().find((item) => item.id === task.data.missionId) ?? null;
+    response.status(201).json({ task: task.data, mission });
   });
 
   app.patch("/missions/:id", (request, response) => {
@@ -130,12 +162,24 @@ export const registerRoutes = (app: Express) => {
     response.json(alarm.data);
   });
 
-  app.get("/events", (_request, response) => {
-    response.json(store.getEvents());
+  app.get("/events", (request, response) => {
+    response.json(
+      store.getEvents({
+        type: typeof request.query.type === "string" ? request.query.type : undefined,
+        source: typeof request.query.source === "string" ? request.query.source : undefined,
+        q: typeof request.query.q === "string" ? request.query.q : undefined
+      })
+    );
   });
 
-  app.get("/events/export", (_request, response) => {
+  app.get("/events/export", (request, response) => {
     response.setHeader("Content-Type", "text/csv");
-    response.send(store.exportEventsCsv());
+    response.send(
+      store.exportEventsCsv({
+        type: typeof request.query.type === "string" ? request.query.type : undefined,
+        source: typeof request.query.source === "string" ? request.query.source : undefined,
+        q: typeof request.query.q === "string" ? request.query.q : undefined
+      })
+    );
   });
 };
