@@ -407,7 +407,7 @@ export class FmsStore {
 
     autoTaskState.lastAttemptAt = now;
     const idleRobots = this.getIdleRobots();
-    if (!idleRobots.length || tasks.some((task) => task.status === "QUEUED")) {
+    if (!idleRobots.length) {
       const status = this.getAutoTaskStatus();
       this.persist();
       return status;
@@ -420,7 +420,7 @@ export class FmsStore {
       const template = autoTaskTemplates[autoTaskState.cursor % autoTaskTemplates.length];
       autoTaskState.cursor += 1;
       attempts += 1;
-      if (this.isTemplateCellBusy(template)) {
+      if (this.isTemplateCellBusy(template) || !this.isTemplateDispatchable(template)) {
         continue;
       }
       const taskResult = this.createTask({
@@ -922,6 +922,25 @@ export class FmsStore {
       );
       return reservedByRobot || reservedByTask;
     });
+  }
+
+  private isTemplateDispatchable(template: Omit<CreateTaskInput, "priority">) {
+    const target = template.type === "GO_CHARGE" ? nearestChargerId(locationCoordinate(template.source, { x: 500, y: 500 })) : template.target;
+    if (!target) {
+      return false;
+    }
+
+    const task: Task = {
+      id: "__AUTO_TEMPLATE__",
+      type: template.type,
+      priority: 3,
+      status: "QUEUED",
+      source: template.source,
+      target,
+      memo: template.memo,
+      createdAt: new Date().toISOString()
+    };
+    return Boolean(this.findDispatchRobot(task));
   }
 
   private isRobotAtStation(robot: Robot, stationId: string) {
