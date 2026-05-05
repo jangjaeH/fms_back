@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 import { alarms, equipment, events, getDashboardSummary, mapSnapshot, missions, robots, tasks } from "../data/mockData.js";
+import { loadPersistedState, savePersistedState } from "./persistence.js";
 import type { AutoTaskStatus, Coordinate, CreateTaskInput, EventItem, Mission, OverrideInput, Robot, Task, TaskType } from "../types.js";
 
 const validTaskTypes: TaskType[] = ["MOVE", "PICK", "DROP", "GO_CHARGE"];
@@ -15,6 +16,12 @@ interface EventFilters {
 interface DispatchPlan {
   robot: Robot;
   route: Coordinate[];
+  sourceWaypointIndex: number;
+}
+
+interface RouteCandidate {
+  route: Coordinate[];
+  sourceWaypointIndex: number;
 }
 
 interface BatteryClock {
@@ -23,11 +30,18 @@ interface BatteryClock {
   chargeAccumulatorMs: number;
 }
 
-const missionStepByTaskType: Record<TaskType, string> = {
+const targetMoveStepByTaskType: Record<TaskType, string> = {
   MOVE: "MOVE_TO_TARGET",
-  PICK: "MOVE_TO_PICK",
+  PICK: "MOVE_TO_TARGET",
   DROP: "MOVE_TO_DROP",
   GO_CHARGE: "MOVE_TO_CHARGER"
+};
+
+const targetHandshakeStepByTaskType: Record<TaskType, string> = {
+  MOVE: "TARGET_HANDSHAKE",
+  PICK: "EQUIPMENT_HANDSHAKE",
+  DROP: "DROP_HANDSHAKE",
+  GO_CHARGE: "CHARGER_HANDSHAKE"
 };
 
 const routeOverlapClearance = 24;
@@ -39,6 +53,7 @@ const safeAisleXs = [55, 245, 390, 590, 730, 920, 1070, 1270, 1425, 1625];
 const stationAccessGap = 25;
 const batteryDischargeIntervalMs = 5 * 60 * 1000;
 const batteryChargeIntervalMs = 60 * 1000;
+const stationHandshakeMs = 2000;
 const lowBatteryThreshold = 20;
 const chargeStopThreshold = 80;
 const chargerArrivalTolerance = 36;
@@ -292,7 +307,7 @@ function safePathCandidates(from: Coordinate, to: Coordinate) {
 
 function buildRouteCandidates(robot: Robot, task: Task) {
   const start = { x: robot.x, y: robot.y };
-  const routes: Coordinate[][] = [];
+  const candidates: RouteCandidate[] = [];
 
   for (const source of accessCoordinates(task.source, start, task.target)) {
     const toSourceCandidates = safePathCandidates(start, source);
@@ -306,17 +321,32 @@ function buildRouteCandidates(robot: Robot, task: Task) {
         for (const toTarget of toTargetCandidates) {
           const route = cleanRoute([...toSource, ...toTarget.slice(1)]);
           if (!routeIntersectsStructures(route)) {
-            routes.push(route);
+            candidates.push({
+              route,
+              sourceWaypointIndex: Math.max(0, toSource.length - 1)
+            });
           }
         }
       }
     }
   }
 
-  return routes.sort((left, right) => routeDistance(left) - routeDistance(right));
+  return candidates.sort((left, right) => routeDistance(left.route) - routeDistance(right.route));
 }
 
 export class FmsStore {
+  constructor() {
+    loadPersistedState(this.stateRefs());
+  }
+
+  private stateRefs() {
+    return { robots, tasks, missions, alarms, events, equipment, mapSnapshot, autoTaskState };
+  }
+
+  private persist() {
+    savePersistedState(this.stateRefs());
+  }
+
   getDashboardSummary() {
     return getDashboardSummary();
   }
@@ -354,6 +384,7 @@ export class FmsStore {
       enabled: autoTaskState.enabled,
       intervalMs: autoTaskState.intervalMs
     });
+    this.persist();
     return this.getAutoTaskStatus();
   }
 
@@ -362,18 +393,24 @@ export class FmsStore {
     this.dispatchQueuedTasks();
 
     if (!autoTaskState.enabled && !options.force) {
-      return this.getAutoTaskStatus();
+      const status = this.getAutoTaskStatus();
+      this.persist();
+      return status;
     }
 
     const now = Date.now();
     if (!options.force && now - autoTaskState.lastAttemptAt < autoTaskState.intervalMs) {
-      return this.getAutoTaskStatus();
+      const status = this.getAutoTaskStatus();
+      this.persist();
+      return status;
     }
 
     autoTaskState.lastAttemptAt = now;
     const idleRobots = this.getIdleRobots();
-    if (!idleRobots.length || tasks.some((task) => task.status === "QUEUED")) {
-      return this.getAutoTaskStatus();
+    if (!idleRobots.length) {
+      const status = this.getAutoTaskStatus();
+      this.persist();
+      return status;
     }
 
     const generatedLimit = Math.min(idleRobots.length, 2);
@@ -383,7 +420,7 @@ export class FmsStore {
       const template = autoTaskTemplates[autoTaskState.cursor % autoTaskTemplates.length];
       autoTaskState.cursor += 1;
       attempts += 1;
-      if (this.isTemplateCellBusy(template)) {
+      if (this.isTemplateCellBusy(template) || !this.isTemplateDispatchable(template)) {
         continue;
       }
       const taskResult = this.createTask({
@@ -407,7 +444,9 @@ export class FmsStore {
       });
     }
 
-    return this.getAutoTaskStatus();
+    const status = this.getAutoTaskStatus();
+    this.persist();
+    return status;
   }
 
   tickRobotPositions(now = Date.now()) {
@@ -417,6 +456,15 @@ export class FmsStore {
 
     for (const robot of robots) {
       if (robot.state !== "MOVING" || robot.route.length < 2) {
+        continue;
+      }
+
+      const heldState = this.advanceHeldMission(robot, now);
+      if (heldState === "WAIT") {
+        continue;
+      }
+      if (heldState === "COMPLETED") {
+        completedAnyMission = true;
         continue;
       }
 
@@ -445,7 +493,14 @@ export class FmsStore {
       robot.currentCell = `X${Math.round(robot.x)} Y${Math.round(robot.y)}`;
       this.updateMissionProgress(robot);
 
+      if (reachedWaypoint && this.startSourceHandshake(robot, targetIndex, now)) {
+        continue;
+      }
+
       if (reachedWaypoint && targetIndex === robot.route.length - 1) {
+        if (this.startTargetHandshake(robot, now)) {
+          continue;
+        }
         completedAnyMission = this.completeRobotMission(robot) || completedAnyMission;
         continue;
       }
@@ -462,6 +517,7 @@ export class FmsStore {
     if (completedAnyMission || batteryStateChanged || chargeDispatched) {
       this.dispatchQueuedTasks();
     }
+    this.persist();
   }
 
   getRobot(id: string) {
@@ -509,6 +565,7 @@ export class FmsStore {
     tasks.unshift(task);
     this.appendEvent("task.created", task.id, { ...task });
     this.dispatchTask(task);
+    this.persist();
     return { data: task } as const;
   }
 
@@ -519,6 +576,7 @@ export class FmsStore {
     }
     Object.assign(task, patch);
     this.appendEvent("task.updated", id, patch);
+    this.persist();
     return task;
   }
 
@@ -543,6 +601,7 @@ export class FmsStore {
     }
     this.appendEvent("task.canceled", id, { id });
     this.dispatchQueuedTasks();
+    this.persist();
     return { data: task } as const;
   }
 
@@ -561,6 +620,7 @@ export class FmsStore {
     }
     Object.assign(mission, patch);
     this.appendEvent("mission.state.changed", id, patch);
+    this.persist();
     return mission;
   }
 
@@ -622,7 +682,7 @@ export class FmsStore {
       mission.robotId = input.targetRobotId;
       mission.state = "RUNNING";
       if (linkedTask && dispatchPlan) {
-        this.assignMissionToRobot(nextRobot, mission, linkedTask, dispatchPlan.route);
+        this.assignMissionToRobot(nextRobot, mission, linkedTask, dispatchPlan);
       }
     }
     this.appendEvent("mission.override.applied", id, {
@@ -631,6 +691,7 @@ export class FmsStore {
       reason: input.reason,
       targetRobotId: input.targetRobotId
     });
+    this.persist();
     return { data: mission } as const;
   }
 
@@ -647,6 +708,7 @@ export class FmsStore {
     target.signal = "MANUAL_RESET";
     target.lastUpdated = new Date().toISOString();
     this.appendEvent("equipment.state.changed", id, { ...target });
+    this.persist();
     return target;
   }
 
@@ -665,6 +727,7 @@ export class FmsStore {
     alarm.status = "ACKED";
     alarm.acknowledgedBy = user;
     this.appendEvent("alarm.acked", id, { user });
+    this.persist();
     return { data: alarm } as const;
   }
 
@@ -679,6 +742,7 @@ export class FmsStore {
     alarm.status = "RESOLVED";
     alarm.resolvedBy = user;
     this.appendEvent("alarm.resolved", id, { user });
+    this.persist();
     return { data: alarm } as const;
   }
 
@@ -860,6 +924,25 @@ export class FmsStore {
     });
   }
 
+  private isTemplateDispatchable(template: Omit<CreateTaskInput, "priority">) {
+    const target = template.type === "GO_CHARGE" ? nearestChargerId(locationCoordinate(template.source, { x: 500, y: 500 })) : template.target;
+    if (!target) {
+      return false;
+    }
+
+    const task: Task = {
+      id: "__AUTO_TEMPLATE__",
+      type: template.type,
+      priority: 3,
+      status: "QUEUED",
+      source: template.source,
+      target,
+      memo: template.memo,
+      createdAt: new Date().toISOString()
+    };
+    return Boolean(this.findDispatchRobot(task));
+  }
+
   private isRobotAtStation(robot: Robot, stationId: string) {
     const station = stationCenter(stationId);
     if (!station) {
@@ -888,9 +971,11 @@ export class FmsStore {
       robotId: dispatchPlan.robot.id,
       taskId: task.id,
       state: "RUNNING",
-      currentStep: missionStepByTaskType[task.type],
+      currentStep: task.type !== "GO_CHARGE" && dispatchPlan.sourceWaypointIndex > 0 ? "MOVE_TO_SOURCE" : targetMoveStepByTaskType[task.type],
       progress: 0,
-      needsManualOverride: false
+      needsManualOverride: false,
+      sourceWaypointIndex: dispatchPlan.sourceWaypointIndex,
+      stepStartedAt: new Date().toISOString()
     };
 
     missions.unshift(mission);
@@ -905,7 +990,7 @@ export class FmsStore {
       this.appendEvent("mission.created", mission.id, { ...mission, task });
       return mission;
     }
-    this.assignMissionToRobot(dispatchPlan.robot, mission, task, dispatchPlan.route);
+    this.assignMissionToRobot(dispatchPlan.robot, mission, task, dispatchPlan);
     this.appendEvent("mission.created", mission.id, { ...mission, task });
     return mission;
   }
@@ -929,11 +1014,11 @@ export class FmsStore {
   }
 
   private buildDispatchPlanForRobot(robot: Robot, task: Task, ignoredMissionIds: string[] = []) {
-    const route = buildRouteCandidates(robot, task).find((candidate) => !this.routeOverlapsActiveRoute(candidate, robot.id, ignoredMissionIds));
-    if (!route) {
+    const candidate = buildRouteCandidates(robot, task).find((item) => !this.routeOverlapsActiveRoute(item.route, robot.id, ignoredMissionIds));
+    if (!candidate) {
       return undefined;
     }
-    return { robot, route };
+    return { robot, route: candidate.route, sourceWaypointIndex: candidate.sourceWaypointIndex };
   }
 
   private routeOverlapsActiveRoute(candidateRoute: Coordinate[], robotId: string, ignoredMissionIds: string[] = []) {
@@ -957,7 +1042,8 @@ export class FmsStore {
     return false;
   }
 
-  private assignMissionToRobot(robot: Robot, mission: Mission, task: Task, route: Coordinate[]) {
+  private assignMissionToRobot(robot: Robot, mission: Mission, task: Task, dispatchPlan: Pick<DispatchPlan, "route" | "sourceWaypointIndex">) {
+    const route = dispatchPlan.route;
     robot.state = "MOVING";
     robot.missionId = mission.id;
     robot.targetCell = task.target;
@@ -965,12 +1051,101 @@ export class FmsStore {
     robot.route = route;
     robot.routeIndex = route.length > 1 ? 1 : 0;
     robot.heading = route.length > 1 ? headingBetween(route[0], route[1]) : robot.heading;
+    mission.sourceWaypointIndex = dispatchPlan.sourceWaypointIndex;
+    mission.currentStep =
+      task.type !== "GO_CHARGE" && dispatchPlan.sourceWaypointIndex > 0 ? "MOVE_TO_SOURCE" : targetMoveStepByTaskType[task.type];
+    mission.stepStartedAt = new Date().toISOString();
     this.appendEvent("mission.dispatched", mission.id, {
       missionId: mission.id,
       taskId: task.id,
       robotId: robot.id,
+      sourceWaypointIndex: mission.sourceWaypointIndex,
       route: robot.route
     });
+  }
+
+  private advanceHeldMission(robot: Robot, now: number) {
+    const mission = robot.missionId ? missions.find((item) => item.id === robot.missionId) : undefined;
+    if (!mission || mission.state !== "RUNNING") {
+      return false;
+    }
+
+    if (!["SOURCE_HANDSHAKE", "EQUIPMENT_HANDSHAKE", "DROP_HANDSHAKE", "TARGET_HANDSHAKE", "CHARGER_HANDSHAKE"].includes(mission.currentStep)) {
+      return false;
+    }
+
+    const stepStartedAt = mission.stepStartedAt ? new Date(mission.stepStartedAt).getTime() : now;
+    if (now - stepStartedAt < stationHandshakeMs) {
+      return "WAIT" as const;
+    }
+
+    const task = tasks.find((item) => item.id === mission.taskId);
+    if (!task) {
+      return false;
+    }
+
+    if (mission.currentStep === "SOURCE_HANDSHAKE") {
+      mission.currentStep = targetMoveStepByTaskType[task.type];
+      mission.stepStartedAt = new Date(now).toISOString();
+      mission.progress = Math.max(mission.progress, 45);
+      task.status = "RUNNING";
+      this.appendEvent("mission.source.handshake.completed", mission.id, {
+        missionId: mission.id,
+        taskId: task.id,
+        source: task.source,
+        nextStep: mission.currentStep
+      });
+      return false;
+    }
+
+    return this.completeRobotMission(robot) ? ("COMPLETED" as const) : false;
+  }
+
+  private startSourceHandshake(robot: Robot, reachedWaypointIndex: number, now: number) {
+    const mission = robot.missionId ? missions.find((item) => item.id === robot.missionId) : undefined;
+    const task = mission ? tasks.find((item) => item.id === mission.taskId) : undefined;
+    if (!mission || !task || task.type === "GO_CHARGE" || mission.state !== "RUNNING") {
+      return false;
+    }
+    if (mission.currentStep !== "MOVE_TO_SOURCE" || mission.sourceWaypointIndex !== reachedWaypointIndex) {
+      return false;
+    }
+
+    mission.currentStep = "SOURCE_HANDSHAKE";
+    mission.stepStartedAt = new Date(now).toISOString();
+    mission.progress = Math.max(mission.progress, 35);
+    task.status = "RUNNING";
+    this.appendEvent("mission.source.arrived", mission.id, {
+      missionId: mission.id,
+      taskId: task.id,
+      source: task.source,
+      robotId: robot.id
+    });
+    return true;
+  }
+
+  private startTargetHandshake(robot: Robot, now: number) {
+    const mission = robot.missionId ? missions.find((item) => item.id === robot.missionId) : undefined;
+    const task = mission ? tasks.find((item) => item.id === mission.taskId) : undefined;
+    if (!mission || !task || mission.state !== "RUNNING") {
+      return false;
+    }
+    if (["EQUIPMENT_HANDSHAKE", "DROP_HANDSHAKE", "TARGET_HANDSHAKE", "CHARGER_HANDSHAKE"].includes(mission.currentStep)) {
+      return true;
+    }
+
+    mission.currentStep = targetHandshakeStepByTaskType[task.type];
+    mission.stepStartedAt = new Date(now).toISOString();
+    mission.progress = Math.max(mission.progress, 95);
+    task.status = "RUNNING";
+    this.appendEvent("mission.target.arrived", mission.id, {
+      missionId: mission.id,
+      taskId: task.id,
+      target: task.target,
+      robotId: robot.id,
+      handshake: mission.currentStep
+    });
+    return true;
   }
 
   private updateMissionProgress(robot: Robot) {
@@ -1002,6 +1177,7 @@ export class FmsStore {
     mission.state = "COMPLETED";
     mission.currentStep = "COMPLETED";
     mission.progress = 100;
+    mission.stepStartedAt = new Date().toISOString();
     if (task) {
       task.status = "COMPLETED";
     }
