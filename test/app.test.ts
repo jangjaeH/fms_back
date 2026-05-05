@@ -277,7 +277,8 @@ describe("robot monitoring backend", () => {
         expect.objectContaining({
           id: response.body.missionId,
           taskId: response.body.id,
-          state: "RUNNING"
+          state: "RUNNING",
+          currentStep: "MOVE_TO_SOURCE"
         })
       ])
     );
@@ -293,6 +294,21 @@ describe("robot monitoring backend", () => {
     for (const robot of otherActiveRobots) {
       expect(routesOverlap(dispatchedRobot?.route ?? [], robot.route)).toBe(false);
     }
+
+    let sawSourceHandshake = false;
+    const startTime = Date.now();
+    for (let index = 1; index <= 80; index += 1) {
+      store.tickRobotPositions(startTime + index * 1000);
+      const currentMission = store.getMissions().find((mission) => mission.id === response.body.missionId);
+      sawSourceHandshake = sawSourceHandshake || currentMission?.currentStep === "SOURCE_HANDSHAKE";
+      if (sawSourceHandshake && currentMission?.currentStep === "MOVE_TO_TARGET") {
+        break;
+      }
+    }
+
+    const advancedMission = store.getMissions().find((mission) => mission.id === response.body.missionId);
+    expect(sawSourceHandshake).toBe(true);
+    expect(advancedMission?.currentStep).toBe("MOVE_TO_TARGET");
   });
 
   it("dispatches low battery robots to charge and stops at eighty percent", () => {

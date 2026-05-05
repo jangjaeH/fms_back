@@ -137,9 +137,11 @@ export const missions: Mission[] = [
     robotId: "R-01",
     taskId: "T-1001",
     state: "RUNNING",
-    currentStep: "MOVE_TO_DROP",
+    currentStep: "MOVE_TO_TARGET",
     progress: 72,
-    needsManualOverride: false
+    needsManualOverride: false,
+    sourceWaypointIndex: 0,
+    stepStartedAt: "2026-04-29T08:10:00.000Z"
   },
   {
     id: "M-1002",
@@ -148,7 +150,9 @@ export const missions: Mission[] = [
     state: "RUNNING",
     currentStep: "MOVE_TO_TARGET",
     progress: 45,
-    needsManualOverride: false
+    needsManualOverride: false,
+    sourceWaypointIndex: 0,
+    stepStartedAt: "2026-04-29T08:12:00.000Z"
   }
 ];
 

@@ -56,6 +56,8 @@ export interface Mission {
   currentStep: string;
   progress: number;
   needsManualOverride: boolean;
+  sourceWaypointIndex?: number;
+  stepStartedAt?: string;
 }
 
 export interface Alarm {
